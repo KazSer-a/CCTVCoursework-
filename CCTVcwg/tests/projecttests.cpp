@@ -1,27 +1,30 @@
 #include "Project.h"
 
 #include <algorithm>
+#include <exception>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace
 {
 // Вершины тестового контура.
-using Points = vector<PlanPoint>;
+using Points = std::vector<PlanPoint>;
 
 // Формирует тестовое здание по внешнему контуру и контурам дворов.
-Building building(Points outer, vector<Points> holes = {})
+Building building(Points outer, std::vector<Points> holes = {})
 {
-    return {0, {{std::move(outer), std::move(holes)}}, nullopt};
+    return {0, {{std::move(outer), std::move(holes)}}, std::nullopt};
 }
 
 // Прерывает выполнение тестов при нарушении проверяемого условия.
 void check(bool condition, const char* name)
 {
     if (!condition)
-        throw runtime_error(name);
+        throw std::runtime_error(name);
 }
 
 // Проверяет добавление зданий и целей, отказ при ошибке и выдачу ID.
@@ -49,10 +52,10 @@ void runTests()
 
     reject(building(Points(2049)), "vertex budget");
     reject(building({{0, 0}, {100001, 0}, {0, 2}}), "coordinate limit");
-    reject(building({{0, 0}, {numeric_limits<double>::quiet_NaN(), 0}, {0, 2}}), "NaN");
+    reject(building({{0, 0}, {std::numeric_limits<double>::quiet_NaN(), 0}, {0, 2}}), "NaN");
 
     auto reversed = square;
-    reverse(reversed.begin(), reversed.end());
+    std::reverse(reversed.begin(), reversed.end());
     check(plan.addBuilding(building(reversed)) == 2, "next building ID");
 
     ObservationTarget target;
@@ -74,9 +77,9 @@ int main()
         runTests();
         return 0;
     }
-    catch (const exception& error)
+    catch (const std::exception& error)
     {
-        cerr << error.what() << '\n';
+        std::cerr << error.what() << '\n';
         return 1;
     }
 }

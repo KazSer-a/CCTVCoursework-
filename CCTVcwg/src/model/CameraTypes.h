@@ -6,16 +6,14 @@
 #include <string>
 #include <vector>
 
-using namespace std;
-
-using CameraModelId = uint64_t;
+using CameraModelId = std::uint64_t;
 
 // Характеристики и стоимость модели камеры из каталога.
 struct CameraModel
 {
     CameraModelId id = 0;
-    string name;
-    uint64_t priceKopecks = 0;
+    std::string name;
+    std::uint64_t priceKopecks = 0;
     double rangeMeters = 0.0;
     double horizontalFovDegrees = 0.0;
     double verticalFovDegrees = 0.0;
@@ -64,7 +62,7 @@ enum class OptimizationStatus
 struct OptimizationResult
 {
     OptimizationStatus status = OptimizationStatus::NotRun;
-    vector<CameraPlacement> placements;
-    uint64_t totalPriceKopecks = 0;
-    vector<CoverageSample> uncoveredSamples;
+    std::vector<CameraPlacement> placements;
+    std::uint64_t totalPriceKopecks = 0;
+    std::vector<CoverageSample> uncoveredSamples;
 };

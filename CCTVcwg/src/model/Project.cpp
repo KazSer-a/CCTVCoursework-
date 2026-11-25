@@ -2,30 +2,35 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <utility>
+#include <variant>
+#include <vector>
 
 namespace
 {
 constexpr double maxCoordinateMeters = 100000.0;
-constexpr size_t maxBuildingVertices = 2048;
-constexpr size_t maxLineVertices = 65536;
+constexpr std::size_t maxBuildingVertices = 2048;
+constexpr std::size_t maxLineVertices = 65536;
 
 // Проверяет границы локальных координат точки.
 bool isValidPoint(const PlanPoint& point)
 {
-    return abs(point.xMeters) <= maxCoordinateMeters &&
-           abs(point.yMeters) <= maxCoordinateMeters;
+    return std::abs(point.xMeters) <= maxCoordinateMeters &&
+           std::abs(point.yMeters) <= maxCoordinateMeters;
 }
 
 // Вершина контура в миллиметрах.
 struct GridPoint
 {
-    int64_t x;
-    int64_t y;
+    std::int64_t x;
+    std::int64_t y;
 };
 
 // Контур с целочисленными координатами.
-using Ring = vector<GridPoint>;
+using Ring = std::vector<GridPoint>;
 
 // Определяет положение точки относительно направленной прямой AB.
 int orientation(GridPoint a, GridPoint b, GridPoint p)
@@ -39,8 +44,8 @@ int orientation(GridPoint a, GridPoint b, GridPoint p)
 // Проверяет принадлежность точки ограничивающему прямоугольнику отрезка.
 bool withinBounds(GridPoint a, GridPoint b, GridPoint p)
 {
-    return min(a.x, b.x) <= p.x && p.x <= max(a.x, b.x) &&
-           min(a.y, b.y) <= p.y && p.y <= max(a.y, b.y);
+    return std::min(a.x, b.x) <= p.x && p.x <= std::max(a.x, b.x) &&
+           std::min(a.y, b.y) <= p.y && p.y <= std::max(a.y, b.y);
 }
 
 // Проверяет пересечение двух отрезков, включая касание и наложение.
@@ -61,9 +66,9 @@ bool intersects(GridPoint a, GridPoint b, GridPoint c, GridPoint d)
 // Проверяет контур на нулевые рёбра, обратный ход и самопересечения.
 bool isSimpleRing(const Ring& ring)
 {
-    const size_t n = ring.size();
+    const std::size_t n = ring.size();
 
-    for (size_t i = 0; i < n; ++i)
+    for (std::size_t i = 0; i < n; ++i)
     {
         const GridPoint a = ring[i];
         const GridPoint b = ring[(i + 1) % n];
@@ -75,7 +80,7 @@ bool isSimpleRing(const Ring& ring)
         if (orientation(a, b, c) == 0 && !withinBounds(a, c, b))
             return false;
 
-        for (size_t j = i + 2; j < n; ++j)
+        for (std::size_t j = i + 2; j < n; ++j)
         {
             // Первое и последнее рёбра имеют общую вершину.
             if (i == 0 && j == n - 1)
@@ -90,7 +95,7 @@ bool isSimpleRing(const Ring& ring)
 }
 
 // Округляет координаты до миллиметра и проверяет полученный контур.
-bool readRing(vector<PlanPoint>& points, Ring& ring)
+bool readRing(std::vector<PlanPoint>& points, Ring& ring)
 {
     ring.reserve(points.size());
 
@@ -100,8 +105,8 @@ bool readRing(vector<PlanPoint>& points, Ring& ring)
             return false;
 
         const GridPoint p{
-            llround(point.xMeters * 1000),
-            llround(point.yMeters * 1000)
+            std::llround(point.xMeters * 1000),
+            std::llround(point.yMeters * 1000)
         };
 
         ring.push_back(p);
@@ -114,9 +119,9 @@ bool readRing(vector<PlanPoint>& points, Ring& ring)
 // Проверяет наличие общих точек у границ двух контуров.
 bool boundariesIntersect(const Ring& first, const Ring& second)
 {
-    for (size_t i = 0; i < first.size(); ++i)
+    for (std::size_t i = 0; i < first.size(); ++i)
     {
-        for (size_t j = 0; j < second.size(); ++j)
+        for (std::size_t j = 0; j < second.size(); ++j)
         {
             if (intersects(first[i], first[(i + 1) % first.size()],
                            second[j], second[(j + 1) % second.size()]))
@@ -132,7 +137,7 @@ bool inside(const Ring& ring, GridPoint point)
 {
     bool result = false;
 
-    for (size_t i = 0; i < ring.size(); ++i)
+    for (std::size_t i = 0; i < ring.size(); ++i)
     {
         const GridPoint a = ring[i];
         const GridPoint b = ring[(i + 1) % ring.size()];
@@ -154,7 +159,7 @@ bool validateFootprint(BuildingFootprint& footprint)
     if (!readRing(footprint.outerRing, outer))
         return false;
 
-    vector<Ring> holes;
+    std::vector<Ring> holes;
 
     for (auto& points : footprint.innerRings)
     {
@@ -177,7 +182,7 @@ bool validateFootprint(BuildingFootprint& footprint)
 }
 
 // Проверяет число вершин контура и уменьшает остаток лимита здания.
-bool accountRing(size_t vertices, size_t& remaining)
+bool accountRing(std::size_t vertices, std::size_t& remaining)
 {
     if (vertices < 3 || vertices > remaining)
         return false;
@@ -188,33 +193,33 @@ bool accountRing(size_t vertices, size_t& remaining)
 }
 
 // Проверяет здание, добавляет его в проект и возвращает присвоенный ID.
-optional<PlanObjectId> Project::addBuilding(Building building)
+std::optional<PlanObjectId> Project::addBuilding(Building building)
 {
     if (nextId_ == 0 || building.footprints.empty())
-        return nullopt;
+        return std::nullopt;
 
     if (building.heightMeters &&
-        (!isfinite(*building.heightMeters) || *building.heightMeters <= 0.0))
-        return nullopt;
+        (!std::isfinite(*building.heightMeters) || *building.heightMeters <= 0.0))
+        return std::nullopt;
 
-    size_t remaining = maxBuildingVertices;
+    std::size_t remaining = maxBuildingVertices;
 
     for (const auto& footprint : building.footprints)
     {
         if (!accountRing(footprint.outerRing.size(), remaining))
-            return nullopt;
+            return std::nullopt;
 
         for (const auto& ring : footprint.innerRings)
         {
             if (!accountRing(ring.size(), remaining))
-                return nullopt;
+                return std::nullopt;
         }
     }
 
     for (auto& footprint : building.footprints)
     {
         if (!validateFootprint(footprint))
-            return nullopt;
+            return std::nullopt;
     }
 
     building.id = nextId_;
@@ -223,34 +228,34 @@ optional<PlanObjectId> Project::addBuilding(Building building)
 }
 
 // Проверяет цель наблюдения, добавляет её в проект и возвращает присвоенный ID.
-optional<PlanObjectId> Project::addTarget(ObservationTarget target)
+std::optional<PlanObjectId> Project::addTarget(ObservationTarget target)
 {
     if (nextId_ == 0)
-        return nullopt;
+        return std::nullopt;
 
-    if (const auto* point = get_if<ObservationPoint>(&target.geometry))
+    if (const auto* point = std::get_if<ObservationPoint>(&target.geometry))
     {
         if (!isValidPoint(point->position) ||
-            !isfinite(point->heightMeters) || point->heightMeters < 0.0)
-            return nullopt;
+            !std::isfinite(point->heightMeters) || point->heightMeters < 0.0)
+            return std::nullopt;
     }
     else
     {
-        const auto& line = get<ObservationLine>(target.geometry);
+        const auto& line = std::get<ObservationLine>(target.geometry);
 
         if (line.centerline.size() < 2 || line.centerline.size() > maxLineVertices ||
-            !all_of(line.centerline.begin(), line.centerline.end(), isValidPoint) ||
-            !isfinite(line.heightMeters) || line.heightMeters < 0.0 ||
-            !isfinite(line.sampleStepMeters) || line.sampleStepMeters <= 0.0)
-            return nullopt;
+            !std::all_of(line.centerline.begin(), line.centerline.end(), isValidPoint) ||
+            !std::isfinite(line.heightMeters) || line.heightMeters < 0.0 ||
+            !std::isfinite(line.sampleStepMeters) || line.sampleStepMeters <= 0.0)
+            return std::nullopt;
 
         const PlanPoint first = line.centerline.front();
 
         // Линия имеет нулевую длину, если все её точки совпадают.
-        if (all_of(line.centerline.begin(), line.centerline.end(), [first](const PlanPoint& p) {
+        if (std::all_of(line.centerline.begin(), line.centerline.end(), [first](const PlanPoint& p) {
                 return p.xMeters == first.xMeters && p.yMeters == first.yMeters;
             }))
-            return nullopt;
+            return std::nullopt;
     }
 
     target.id = nextId_;
@@ -259,13 +264,13 @@ optional<PlanObjectId> Project::addTarget(ObservationTarget target)
 }
 
 // Возвращает коллекцию зданий проекта для чтения.
-const vector<Building>& Project::buildings() const
+const std::vector<Building>& Project::buildings() const
 {
     return buildings_;
 }
 
 // Возвращает коллекцию целей наблюдения для чтения.
-const vector<ObservationTarget>& Project::targets() const
+const std::vector<ObservationTarget>& Project::targets() const
 {
     return targets_;
 }

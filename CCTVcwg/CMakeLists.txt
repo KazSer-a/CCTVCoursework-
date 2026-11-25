@@ -16,6 +16,8 @@ qt_add_executable(CCTVNSTU
     src/ui/mainwindow.cpp
     src/ui/mainwindow.h
     src/ui/mainwindow.ui
+    src/ui/PlanView.h
+    src/ui/PlanView.cpp
 
     src/model/PlanObjects.h
     src/model/CameraTypes.h

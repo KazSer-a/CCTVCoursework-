@@ -6,9 +6,7 @@
 #include <variant>
 #include <vector>
 
-using namespace std;
-
-using PlanObjectId = uint64_t;
+using PlanObjectId = std::uint64_t;
 
 // Точка в локальной системе координат плана.
 struct PlanPoint
@@ -28,18 +26,18 @@ struct PlanSegment
 struct BuildingFootprint
 {
     // В каждом контуре первая вершина в конце не дублируется.
-    vector<PlanPoint> outerRing;
-    vector<vector<PlanPoint>> innerRings;
+    std::vector<PlanPoint> outerRing;
+    std::vector<std::vector<PlanPoint>> innerRings;
 };
 
 // Здание на плане и его высота.
 struct Building
 {
     PlanObjectId id = 0;
-    vector<BuildingFootprint> footprints;
+    std::vector<BuildingFootprint> footprints;
 
     // Отсутствие значения означает, что высота неизвестна.
-    optional<double> heightMeters;
+    std::optional<double> heightMeters;
 };
 
 // Прямолинейный участок ограждения.
@@ -54,7 +52,7 @@ struct Fence
 struct Road
 {
     PlanObjectId id = 0;
-    vector<PlanPoint> centerline;
+    std::vector<PlanPoint> centerline;
 };
 
 // Координаты и высота точечной цели.
@@ -67,7 +65,7 @@ struct ObservationPoint
 // Линия, вдоль которой проверяется видимость.
 struct ObservationLine
 {
-    vector<PlanPoint> centerline;
+    std::vector<PlanPoint> centerline;
     double heightMeters = 0.0;
     double sampleStepMeters = 1.0;
 };
@@ -76,21 +74,21 @@ struct ObservationLine
 struct ObservationTarget
 {
     PlanObjectId id = 0;
-    string label;
-    variant<ObservationPoint, ObservationLine> geometry;
+    std::string label;
+    std::variant<ObservationPoint, ObservationLine> geometry;
 };
 
 // Точка или отрезок, где разрешён монтаж камеры.
 struct MountZone
 {
     PlanObjectId id = 0;
-    variant<PlanPoint, PlanSegment> geometry;
-    vector<double> allowedHeightsMeters;
+    std::variant<PlanPoint, PlanSegment> geometry;
+    std::vector<double> allowedHeightsMeters;
     double placementStepMeters = 1.0;
 
     // При монтаже на фасаде указывает на здание.
     // В остальных случаях значение отсутствует.
-    optional<PlanObjectId> buildingId;
+    std::optional<PlanObjectId> buildingId;
 };
 
 // Географические координаты начала локальной системы плана.

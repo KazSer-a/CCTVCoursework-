@@ -5,21 +5,43 @@
 #include <optional>
 #include <vector>
 
-using namespace std;
-
-// План объекта и операции добавления его элементов.
+// План объекта и операции изменения его состава.
 class Project
 {
 public:
-    // Возвращают ID добавленного объекта или nullopt при отказе.
-    optional<PlanObjectId> addBuilding(Building building);
-    optional<PlanObjectId> addTarget(ObservationTarget target);
+    // Проверяет и добавляет здание, возвращает присвоенный идентификатор.
+    std::optional<PlanObjectId> addBuilding(Building building);
 
-    const vector<Building>& buildings() const;
-    const vector<ObservationTarget>& targets() const;
+    // Проверяет и добавляет цель, возвращает присвоенный идентификатор.
+    std::optional<PlanObjectId> addTarget(ObservationTarget target);
+
+    // Возвращает коллекцию зданий проекта.
+    const std::vector<Building>& buildings() const;
+
+    // Возвращает коллекцию целей наблюдения.
+    const std::vector<ObservationTarget>& targets() const;
+
+    // Удаляет последнее добавленное здание или цель наблюдения.
+    bool undoLastAddition()
+    {
+        if (buildings_.empty() && targets_.empty())
+            return false;
+
+        if (targets_.empty() ||
+            (!buildings_.empty() && buildings_.back().id > targets_.back().id))
+        {
+            buildings_.pop_back();
+        }
+        else
+        {
+            targets_.pop_back();
+        }
+
+        return true;
+    }
 
 private:
     PlanObjectId nextId_ = 1;
-    vector<Building> buildings_;
-    vector<ObservationTarget> targets_;
+    std::vector<Building> buildings_;
+    std::vector<ObservationTarget> targets_;
 };
