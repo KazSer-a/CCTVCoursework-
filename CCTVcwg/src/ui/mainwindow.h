@@ -3,7 +3,6 @@
 #include "../model/Project.h"
 
 #include <QMainWindow>
-
 #include <optional>
 
 QT_BEGIN_NAMESPACE
@@ -14,57 +13,91 @@ class MainWindow;
 QT_END_NAMESPACE
 
 class PlanView;
+class QComboBox;
+class QDoubleSpinBox;
 
-// Главное окно редактора плана объекта.
+// Главное окно редактора плана.
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
 
 public:
-    // Создаёт главное окно и настраивает инструменты редактирования.
+    // Создаёт окно и подключает инструменты.
     explicit MainWindow(QWidget* parent = nullptr);
 
-    // Освобождает объект формы главного окна.
+    // Освобождает объект формы.
     ~MainWindow() override;
 
 private:
-    // Доступные инструменты редактирования плана.
+    // Инструменты редактирования плана.
     enum class DrawingTool
     {
         ObservationPoint,
-        Building
+        Building,
+        Camera,
+        Fence
     };
 
-    // Создаёт панель выбора инструмента.
+    // Создаёт панель инструментов.
     void setupDrawingTools();
 
-    // Выбирает инструмент и сбрасывает незавершённое построение.
+    // Создаёт панель параметров высоты.
+    void setupHeights();
+
+    // Переключает активный инструмент.
     void selectDrawingTool(DrawingTool tool);
 
-    // Передаёт координаты щелчка активному инструменту.
+    // Передаёт щелчок активному инструменту.
     void handlePlanClick(PlanPoint position);
 
-    // Обновляет предварительный контур по положению курсора.
-    void updateBuildingPreview(PlanPoint position);
+    // Обновляет предварительную геометрию.
+    void updateDrawingPreview(PlanPoint position);
 
-    // Отменяет незавершённое построение здания.
-    void cancelBuilding();
+    // Сбрасывает незавершённое построение.
+    void cancelDrawing();
 
-    // Отменяет построение или последнее добавление объекта.
+    // Отменяет построение или последнее добавление.
     void undoLastAction();
 
-    // Восстанавливает отображение объектов из модели.
+    // Отображает текущее состояние проекта.
     void redrawPlan();
 
-    // Добавляет и отображает точечную цель наблюдения.
+    // Добавляет цель на заданной высоте.
     void addObservationPoint(PlanPoint position);
 
-    // Принимает углы прямоугольника и добавляет здание.
+    // Принимает противоположные углы здания.
     void addBuildingCorner(PlanPoint position);
+
+    // Принимает конечные точки ограждения.
+    void addFencePoint(PlanPoint position);
+
+    // Задаёт место установки и направление камеры.
+    void placeCamera(PlanPoint position);
+
+    // Формирует камеру по параметрам панели.
+    CameraPlacement makeCamera(PlanPoint at, double angle) const;
+
+    // Возвращает выбранную для расчёта камеру.
+    const CameraPlacement* selectedCamera() const;
+
+    // Добавляет объект в список изменения высоты.
+    void rememberObject(const QString& type, PlanObjectId id);
 
     Ui::MainWindow* ui;
     Project project_;
     PlanView* planView_;
+
+    QComboBox* cameraList_ = nullptr;
+    QComboBox* objects_ = nullptr;
+    QDoubleSpinBox* cameraZ_ = nullptr;
+    QDoubleSpinBox* targetZ_ = nullptr;
+    QDoubleSpinBox* buildingZ_ = nullptr;
+    QDoubleSpinBox* fenceZ_ = nullptr;
+    QDoubleSpinBox* tilt_ = nullptr;
+    QDoubleSpinBox* vfov_ = nullptr;
+
     DrawingTool drawingTool_ = DrawingTool::ObservationPoint;
     std::optional<PlanPoint> firstBuildingCorner_;
+    std::optional<PlanPoint> fenceStart_;
+    std::optional<PlanPoint> cameraOrigin_;
 };

@@ -24,6 +24,9 @@ qt_add_executable(CCTVNSTU
     src/model/Project.h
     src/model/Project.cpp
 
+    src/geometry/VisibilityCalculator.h
+    src/geometry/VisibilityCalculator.cpp
+
     src/optimization/CandidateGenerator.cpp
 )
 
@@ -37,9 +40,15 @@ if(BUILD_TESTING)
         src/model/Project.cpp
         src/model/Project.h
         src/model/PlanObjects.h
+        src/model/CameraTypes.h
+        src/geometry/VisibilityCalculator.cpp
+        src/geometry/VisibilityCalculator.h
     )
 
-    target_include_directories(ProjectTests PRIVATE src/model)
+    target_include_directories(ProjectTests PRIVATE
+        src/model
+        src/geometry
+    )
 
     set_target_properties(ProjectTests PROPERTIES
         AUTOMOC OFF
@@ -47,6 +56,28 @@ if(BUILD_TESTING)
     )
 
     add_test(NAME ProjectTests COMMAND ProjectTests)
+
+    add_executable(VisibilityTests
+        tests/VisibilityTests.cpp
+        src/geometry/VisibilityCalculator.cpp
+        src/geometry/VisibilityCalculator.h
+        src/model/Project.cpp
+        src/model/Project.h
+        src/model/PlanObjects.h
+        src/model/CameraTypes.h
+    )
+
+    target_include_directories(VisibilityTests PRIVATE
+        src/model
+        src/geometry
+    )
+
+    set_target_properties(VisibilityTests PROPERTIES
+        AUTOMOC OFF
+        AUTOUIC OFF
+    )
+
+    add_test(NAME VisibilityTests COMMAND VisibilityTests)
 endif()
 
 install(TARGETS CCTVNSTU

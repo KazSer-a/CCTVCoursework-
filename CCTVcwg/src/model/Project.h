@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PlanObjects.h"
+#include "CameraTypes.h"
 
 #include <optional>
 #include <vector>
@@ -9,39 +9,40 @@
 class Project
 {
 public:
-    // Проверяет и добавляет здание, возвращает присвоенный идентификатор.
+    // Проверяет и добавляет здание.
     std::optional<PlanObjectId> addBuilding(Building building);
 
-    // Проверяет и добавляет цель, возвращает присвоенный идентификатор.
+    // Проверяет и добавляет цель наблюдения.
     std::optional<PlanObjectId> addTarget(ObservationTarget target);
 
-    // Возвращает коллекцию зданий проекта.
+    // Проверяет и добавляет камеру.
+    std::optional<PlanObjectId> addCamera(CameraPlacement camera);
+
+    // Проверяет и добавляет ограждение.
+    std::optional<PlanObjectId> addFence(Fence fence);
+
+    // Возвращает здания проекта.
     const std::vector<Building>& buildings() const;
 
-    // Возвращает коллекцию целей наблюдения.
+    // Возвращает цели наблюдения.
     const std::vector<ObservationTarget>& targets() const;
 
-    // Удаляет последнее добавленное здание или цель наблюдения.
-    bool undoLastAddition()
-    {
-        if (buildings_.empty() && targets_.empty())
-            return false;
+    // Возвращает установленные камеры.
+    const std::vector<CameraPlacement>& cameras() const;
 
-        if (targets_.empty() ||
-            (!buildings_.empty() && buildings_.back().id > targets_.back().id))
-        {
-            buildings_.pop_back();
-        }
-        else
-        {
-            targets_.pop_back();
-        }
+    // Возвращает ограждения проекта.
+    const std::vector<Fence>& fences() const;
 
-        return true;
-    }
+    // Изменяет высоту объекта по идентификатору.
+    bool setHeight(PlanObjectId id, double meters);
+
+    // Удаляет последний добавленный объект.
+    bool undoLastAddition();
 
 private:
     PlanObjectId nextId_ = 1;
     std::vector<Building> buildings_;
     std::vector<ObservationTarget> targets_;
+    std::vector<CameraPlacement> cameras_;
+    std::vector<Fence> fences_;
 };

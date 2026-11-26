@@ -1,13 +1,12 @@
 #include "Project.h"
+#include "../geometry/VisibilityCalculator.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <utility>
 #include <variant>
-#include <vector>
 
 namespace
 {
@@ -15,7 +14,7 @@ constexpr double maxCoordinateMeters = 100000.0;
 constexpr std::size_t maxBuildingVertices = 2048;
 constexpr std::size_t maxLineVertices = 65536;
 
-// Проверяет границы локальных координат точки.
+// Проверяет допустимость координат точки.
 bool isValidPoint(const PlanPoint& point)
 {
     return std::abs(point.xMeters) <= maxCoordinateMeters &&
@@ -29,7 +28,7 @@ struct GridPoint
     std::int64_t y;
 };
 
-// Контур с целочисленными координатами.
+// Контур в целочисленных координатах.
 using Ring = std::vector<GridPoint>;
 
 // Определяет положение точки относительно направленной прямой AB.
@@ -41,14 +40,14 @@ int orientation(GridPoint a, GridPoint b, GridPoint p)
     return (cross > 0) - (cross < 0);
 }
 
-// Проверяет принадлежность точки ограничивающему прямоугольнику отрезка.
+// Проверяет принадлежность ограничивающему прямоугольнику.
 bool withinBounds(GridPoint a, GridPoint b, GridPoint p)
 {
     return std::min(a.x, b.x) <= p.x && p.x <= std::max(a.x, b.x) &&
            std::min(a.y, b.y) <= p.y && p.y <= std::max(a.y, b.y);
 }
 
-// Проверяет пересечение двух отрезков, включая касание и наложение.
+// Проверяет пересечение отрезков с учётом касания.
 bool intersects(GridPoint a, GridPoint b, GridPoint c, GridPoint d)
 {
     const int abc = orientation(a, b, c);
@@ -63,7 +62,7 @@ bool intersects(GridPoint a, GridPoint b, GridPoint c, GridPoint d)
            (abc * abd < 0 && cda * cdb < 0);
 }
 
-// Проверяет контур на нулевые рёбра, обратный ход и самопересечения.
+// Проверяет рёбра и самопересечения контура.
 bool isSimpleRing(const Ring& ring)
 {
     const std::size_t n = ring.size();
@@ -82,7 +81,6 @@ bool isSimpleRing(const Ring& ring)
 
         for (std::size_t j = i + 2; j < n; ++j)
         {
-            // Первое и последнее рёбра имеют общую вершину.
             if (i == 0 && j == n - 1)
                 continue;
 
@@ -94,7 +92,7 @@ bool isSimpleRing(const Ring& ring)
     return true;
 }
 
-// Округляет координаты до миллиметра и проверяет полученный контур.
+// Округляет координаты до миллиметра и проверяет контур.
 bool readRing(std::vector<PlanPoint>& points, Ring& ring)
 {
     ring.reserve(points.size());
@@ -105,8 +103,8 @@ bool readRing(std::vector<PlanPoint>& points, Ring& ring)
             return false;
 
         const GridPoint p{
-            std::llround(point.xMeters * 1000),
-            std::llround(point.yMeters * 1000)
+            std::llround(point.xMeters * 1000.0),
+            std::llround(point.yMeters * 1000.0)
         };
 
         ring.push_back(p);
@@ -116,7 +114,7 @@ bool readRing(std::vector<PlanPoint>& points, Ring& ring)
     return isSimpleRing(ring);
 }
 
-// Проверяет наличие общих точек у границ двух контуров.
+// Проверяет пересечение границ двух контуров.
 bool boundariesIntersect(const Ring& first, const Ring& second)
 {
     for (std::size_t i = 0; i < first.size(); ++i)
@@ -132,7 +130,7 @@ bool boundariesIntersect(const Ring& first, const Ring& second)
     return false;
 }
 
-// Проверяет положение точки внутри контура после исключения касания границы.
+// Проверяет положение точки внутри контура после исключения касания.
 bool inside(const Ring& ring, GridPoint point)
 {
     bool result = false;
@@ -152,10 +150,11 @@ bool inside(const Ring& ring, GridPoint point)
     return result;
 }
 
-// Проверяет внешний контур части здания и расположение её внутренних дворов.
+// Проверяет внешний контур здания и расположение дворов.
 bool validateFootprint(BuildingFootprint& footprint)
 {
     Ring outer;
+
     if (!readRing(footprint.outerRing, outer))
         return false;
 
@@ -164,14 +163,15 @@ bool validateFootprint(BuildingFootprint& footprint)
     for (auto& points : footprint.innerRings)
     {
         Ring hole;
+
         if (!readRing(points, hole) || boundariesIntersect(outer, hole) ||
             !inside(outer, hole.front()))
             return false;
 
-        for (const auto& other : holes)
+        for (const Ring& other : holes)
         {
-            if (boundariesIntersect(other, hole) || inside(other, hole.front()) ||
-                inside(hole, other.front()))
+            if (boundariesIntersect(other, hole) ||
+                inside(other, hole.front()) || inside(hole, other.front()))
                 return false;
         }
 
@@ -181,7 +181,7 @@ bool validateFootprint(BuildingFootprint& footprint)
     return true;
 }
 
-// Проверяет число вершин контура и уменьшает остаток лимита здания.
+// Проверяет число вершин и учитывает остаток лимита.
 bool accountRing(std::size_t vertices, std::size_t& remaining)
 {
     if (vertices < 3 || vertices > remaining)
@@ -192,7 +192,7 @@ bool accountRing(std::size_t vertices, std::size_t& remaining)
 }
 }
 
-// Проверяет здание, добавляет его в проект и возвращает присвоенный ID.
+// Проверяет геометрию здания и расположение существующих камер.
 std::optional<PlanObjectId> Project::addBuilding(Building building)
 {
     if (nextId_ == 0 || building.footprints.empty())
@@ -204,22 +204,33 @@ std::optional<PlanObjectId> Project::addBuilding(Building building)
 
     std::size_t remaining = maxBuildingVertices;
 
-    for (const auto& footprint : building.footprints)
+    for (const auto& part : building.footprints)
     {
-        if (!accountRing(footprint.outerRing.size(), remaining))
+        if (!accountRing(part.outerRing.size(), remaining))
             return std::nullopt;
 
-        for (const auto& ring : footprint.innerRings)
+        for (const auto& hole : part.innerRings)
         {
-            if (!accountRing(ring.size(), remaining))
+            if (!accountRing(hole.size(), remaining))
                 return std::nullopt;
         }
     }
 
-    for (auto& footprint : building.footprints)
+    for (auto& part : building.footprints)
     {
-        if (!validateFootprint(footprint))
+        if (!validateFootprint(part))
             return std::nullopt;
+    }
+
+    if (!cameras_.empty())
+    {
+        const std::vector<Building> added{building};
+
+        for (const auto& camera : cameras_)
+        {
+            if (!VisibilityCalculator::mountPoint(camera.pose.position, added, 0.0))
+                return std::nullopt;
+        }
     }
 
     building.id = nextId_;
@@ -227,7 +238,7 @@ std::optional<PlanObjectId> Project::addBuilding(Building building)
     return nextId_++;
 }
 
-// Проверяет цель наблюдения, добавляет её в проект и возвращает присвоенный ID.
+// Проверяет и добавляет точечную или линейную цель.
 std::optional<PlanObjectId> Project::addTarget(ObservationTarget target)
 {
     if (nextId_ == 0)
@@ -251,10 +262,13 @@ std::optional<PlanObjectId> Project::addTarget(ObservationTarget target)
 
         const PlanPoint first = line.centerline.front();
 
-        // Линия имеет нулевую длину, если все её точки совпадают.
-        if (std::all_of(line.centerline.begin(), line.centerline.end(), [first](const PlanPoint& p) {
-                return p.xMeters == first.xMeters && p.yMeters == first.yMeters;
-            }))
+        const bool collapsed = std::all_of(
+            line.centerline.begin(), line.centerline.end(),
+            [first](const PlanPoint& p) {
+                return first.xMeters == p.xMeters && first.yMeters == p.yMeters;
+            });
+
+        if (collapsed)
             return std::nullopt;
     }
 
@@ -263,14 +277,142 @@ std::optional<PlanObjectId> Project::addTarget(ObservationTarget target)
     return nextId_++;
 }
 
-// Возвращает коллекцию зданий проекта для чтения.
+// Проверяет параметры и место установки камеры.
+std::optional<PlanObjectId> Project::addCamera(CameraPlacement camera)
+{
+    const CameraModel& model = camera.model;
+    const CameraPose& pose = camera.pose;
+
+    if (nextId_ == 0 || !isValidPoint(pose.position) ||
+        !std::isfinite(model.rangeMeters) || model.rangeMeters <= 0.0 ||
+        !std::isfinite(model.horizontalFovDegrees) ||
+        model.horizontalFovDegrees <= 0.0 || model.horizontalFovDegrees > 360.0 ||
+        !std::isfinite(model.verticalFovDegrees) ||
+        model.verticalFovDegrees <= 0.0 || model.verticalFovDegrees > 180.0 ||
+        !std::isfinite(pose.azimuthDegrees) ||
+        !std::isfinite(pose.heightMeters) || pose.heightMeters < 0.0 ||
+        !std::isfinite(pose.tiltDegrees) || std::abs(pose.tiltDegrees) > 90.0)
+    {
+        return std::nullopt;
+    }
+
+    if (!VisibilityCalculator::mountPoint(pose.position, buildings_, 0.0))
+        return std::nullopt;
+
+    camera.id = nextId_;
+    cameras_.push_back(std::move(camera));
+    return nextId_++;
+}
+
+// Проверяет концы и высоту ограждения.
+std::optional<PlanObjectId> Project::addFence(Fence fence)
+{
+    const auto a = fence.segment.start;
+    const auto b = fence.segment.end;
+
+    if (nextId_ == 0 || !isValidPoint(a) || !isValidPoint(b) ||
+        (a.xMeters == b.xMeters && a.yMeters == b.yMeters) ||
+        !std::isfinite(fence.heightMeters) || fence.heightMeters <= 0.0)
+        return std::nullopt;
+
+    fence.id = nextId_;
+    fences_.push_back(fence);
+    return nextId_++;
+}
+
+// Возвращает здания проекта.
 const std::vector<Building>& Project::buildings() const
 {
     return buildings_;
 }
 
-// Возвращает коллекцию целей наблюдения для чтения.
+// Возвращает цели наблюдения.
 const std::vector<ObservationTarget>& Project::targets() const
 {
     return targets_;
+}
+
+// Возвращает камеры проекта.
+const std::vector<CameraPlacement>& Project::cameras() const
+{
+    return cameras_;
+}
+
+// Возвращает ограждения проекта.
+const std::vector<Fence>& Project::fences() const
+{
+    return fences_;
+}
+
+// Изменяет высоту объекта с указанным идентификатором.
+bool Project::setHeight(PlanObjectId id, double meters)
+{
+    if (!std::isfinite(meters) || meters < 0.0)
+        return false;
+
+    for (auto& building : buildings_)
+    {
+        if (building.id == id && meters > 0.0)
+        {
+            building.heightMeters = meters;
+            return true;
+        }
+    }
+
+    for (auto& fence : fences_)
+    {
+        if (fence.id == id && meters > 0.0)
+        {
+            fence.heightMeters = meters;
+            return true;
+        }
+    }
+
+    for (auto& camera : cameras_)
+    {
+        if (camera.id == id)
+        {
+            camera.pose.heightMeters = meters;
+            return true;
+        }
+    }
+
+    for (auto& target : targets_)
+    {
+        if (target.id == id)
+        {
+            std::visit([meters](auto& geometry) {
+                geometry.heightMeters = meters;
+            }, target.geometry);
+
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Удаляет объект с наибольшим присвоенным идентификатором.
+bool Project::undoLastAddition()
+{
+    const PlanObjectId buildingId = buildings_.empty() ? 0 : buildings_.back().id;
+    const PlanObjectId targetId = targets_.empty() ? 0 : targets_.back().id;
+    const PlanObjectId cameraId = cameras_.empty() ? 0 : cameras_.back().id;
+    const PlanObjectId fenceId = fences_.empty() ? 0 : fences_.back().id;
+
+    const PlanObjectId last = std::max({buildingId, targetId, cameraId, fenceId});
+
+    if (last == 0)
+        return false;
+
+    if (last == fenceId)
+        fences_.pop_back();
+    else if (last == cameraId)
+        cameras_.pop_back();
+    else if (last == targetId)
+        targets_.pop_back();
+    else
+        buildings_.pop_back();
+
+    return true;
 }

@@ -8,7 +8,7 @@
 
 using CameraModelId = std::uint64_t;
 
-// Характеристики и стоимость модели камеры из каталога.
+// Характеристики модели камеры из каталога.
 struct CameraModel
 {
     CameraModelId id = 0;
@@ -19,7 +19,7 @@ struct CameraModel
     double verticalFovDegrees = 0.0;
 };
 
-// Положение и ориентация камеры на плане.
+// Положение и ориентация камеры.
 struct CameraPose
 {
     PlanPoint position;
@@ -32,14 +32,15 @@ struct CameraPose
     double tiltDegrees = 0.0;
 };
 
-// Установка камеры с характеристиками модели на момент расчёта.
+// Установленная камера с параметрами модели.
 struct CameraPlacement
 {
     CameraModel model;
     CameraPose pose;
+    PlanObjectId id = 0;
 };
 
-// Контрольная точка, для которой проверяется видимость.
+// Контрольная точка для проверки покрытия.
 struct CoverageSample
 {
     PlanObjectId targetId = 0;
@@ -58,7 +59,7 @@ enum class OptimizationStatus
     Cancelled
 };
 
-// Результат подбора камер и проверки покрытия.
+// Результат подбора оборудования.
 struct OptimizationResult
 {
     OptimizationStatus status = OptimizationStatus::NotRun;

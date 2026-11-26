@@ -1,50 +1,70 @@
 #pragma once
 
-#include "../model/PlanObjects.h"
+#include "../model/Project.h"
 
 #include <QGraphicsView>
+#include <QPoint>
 
+class QGraphicsPathItem;
 class QGraphicsRectItem;
 class QMouseEvent;
 
-// Графическое представление плана объекта.
+// Графическое представление плана.
 class PlanView : public QGraphicsView
 {
     Q_OBJECT
 
 public:
-    // Создаёт графическую сцену плана.
+    // Создаёт сцену плана.
     explicit PlanView(QWidget* parent = nullptr);
 
-    // Отображает контуры здания и его внутренних дворов.
+    // Отображает части здания и дворы.
     void drawBuilding(const Building& building);
 
-    // Отображает точечную цель наблюдения.
-    void drawObservationPoint(const PlanPoint& position);
+    // Отображает точечную цель.
+    void drawObservationPoint(const PlanPoint& position, bool covered = false);
 
-    // Отображает предварительный контур здания по двум углам.
+    // Отображает камеру и покрытие выбранной высоты.
+    void drawCamera(const CameraPlacement& camera, bool selected,
+                    const Project& project, double z);
+
+    // Обновляет предварительную область обзора.
+    void previewCamera(const CameraPlacement& camera, const Project& project, double z);
+
+    // Отображает ограждение.
+    void drawFence(const Fence& fence);
+
+    // Обновляет прямоугольник строящегося здания.
     void showBuildingPreview(const PlanPoint& first, const PlanPoint& second);
 
-    // Скрывает предварительный контур здания.
-    void hideBuildingPreview();
+    // Скрывает элементы предварительного построения.
+    void hidePreview();
 
-    // Удаляет графические объекты плана.
+    // Очищает сцену.
     void clearPlan();
 
 signals:
-    // Передаёт координаты выбранной точки в метрах.
+    // Передаёт координаты нажатия мыши.
     void pointSelected(PlanPoint position);
 
-    // Передаёт текущие координаты курсора в метрах.
+    // Передаёт координаты курсора.
     void cursorMoved(PlanPoint position);
 
+    // Передаёт конечную точку перетаскивания.
+    void dragFinished(PlanPoint position);
+
 protected:
-    // Обрабатывает выбор точки левой кнопкой мыши.
+    // Обрабатывает нажатие кнопки мыши.
     void mousePressEvent(QMouseEvent* event) override;
 
-    // Обрабатывает перемещение курсора над планом.
+    // Обрабатывает перемещение мыши.
     void mouseMoveEvent(QMouseEvent* event) override;
 
+    // Обрабатывает отпускание кнопки мыши.
+    void mouseReleaseEvent(QMouseEvent* event) override;
+
 private:
+    QPoint pressPosition_;
     QGraphicsRectItem* buildingPreview_ = nullptr;
+    QGraphicsPathItem* cameraPreview_ = nullptr;
 };
