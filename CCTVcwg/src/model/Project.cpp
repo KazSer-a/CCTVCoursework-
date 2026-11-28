@@ -21,30 +21,38 @@ bool isValidPoint(const PlanPoint& point)
            std::abs(point.yMeters) <= maxCoordinateMeters;
 }
 
-// Вершина контура в миллиметрах.
+// Представляет точку в целых миллиметрах.
 struct GridPoint
 {
     std::int64_t x;
     std::int64_t y;
 };
 
-// Контур в целочисленных координатах.
 using Ring = std::vector<GridPoint>;
 
-// Определяет положение точки относительно направленной прямой AB.
-int orientation(GridPoint a, GridPoint b, GridPoint p)
+// Переводит допустимую точку плана в миллиметры.
+GridPoint toGrid(PlanPoint point)
 {
-    const auto cross = (b.x - a.x) * (p.y - a.y) -
-                       (b.y - a.y) * (p.x - a.x);
+    return {
+        std::llround(point.xMeters * 1000.0),
+        std::llround(point.yMeters * 1000.0)
+    };
+}
+
+// Определяет положение точки относительно направленной прямой AB.
+int orientation(GridPoint a, GridPoint b, GridPoint point)
+{
+    const auto cross = (b.x - a.x) * (point.y - a.y) -
+                       (b.y - a.y) * (point.x - a.x);
 
     return (cross > 0) - (cross < 0);
 }
 
-// Проверяет принадлежность ограничивающему прямоугольнику.
-bool withinBounds(GridPoint a, GridPoint b, GridPoint p)
+// Проверяет принадлежность точки ограничивающему прямоугольнику отрезка.
+bool withinBounds(GridPoint a, GridPoint b, GridPoint point)
 {
-    return std::min(a.x, b.x) <= p.x && p.x <= std::max(a.x, b.x) &&
-           std::min(a.y, b.y) <= p.y && p.y <= std::max(a.y, b.y);
+    return std::min(a.x, b.x) <= point.x && point.x <= std::max(a.x, b.x) &&
+           std::min(a.y, b.y) <= point.y && point.y <= std::max(a.y, b.y);
 }
 
 // Проверяет пересечение отрезков с учётом касания.
@@ -62,16 +70,16 @@ bool intersects(GridPoint a, GridPoint b, GridPoint c, GridPoint d)
            (abc * abd < 0 && cda * cdb < 0);
 }
 
-// Проверяет рёбра и самопересечения контура.
+// Проверяет контур на нулевые рёбра и самопересечения.
 bool isSimpleRing(const Ring& ring)
 {
-    const std::size_t n = ring.size();
+    const std::size_t count = ring.size();
 
-    for (std::size_t i = 0; i < n; ++i)
+    for (std::size_t i = 0; i < count; ++i)
     {
         const GridPoint a = ring[i];
-        const GridPoint b = ring[(i + 1) % n];
-        const GridPoint c = ring[(i + 2) % n];
+        const GridPoint b = ring[(i + 1) % count];
+        const GridPoint c = ring[(i + 2) % count];
 
         if (a.x == b.x && a.y == b.y)
             return false;
@@ -79,12 +87,13 @@ bool isSimpleRing(const Ring& ring)
         if (orientation(a, b, c) == 0 && !withinBounds(a, c, b))
             return false;
 
-        for (std::size_t j = i + 2; j < n; ++j)
+        for (std::size_t j = i + 2; j < count; ++j)
         {
-            if (i == 0 && j == n - 1)
+            // Первое и последнее рёбра имеют общую вершину.
+            if (i == 0 && j == count - 1)
                 continue;
 
-            if (intersects(a, b, ring[j], ring[(j + 1) % n]))
+            if (intersects(a, b, ring[j], ring[(j + 1) % count]))
                 return false;
         }
     }
@@ -102,16 +111,24 @@ bool readRing(std::vector<PlanPoint>& points, Ring& ring)
         if (!isValidPoint(point))
             return false;
 
-        const GridPoint p{
-            std::llround(point.xMeters * 1000.0),
-            std::llround(point.yMeters * 1000.0)
-        };
-
-        ring.push_back(p);
-        point = {p.x / 1000.0, p.y / 1000.0};
+        const GridPoint grid = toGrid(point);
+        ring.push_back(grid);
+        point = {grid.x / 1000.0, grid.y / 1000.0};
     }
 
     return isSimpleRing(ring);
+}
+
+// Проверяет касание или пересечение отрезка с контуром.
+bool touchesRing(GridPoint a, GridPoint b, const Ring& ring)
+{
+    for (std::size_t i = 0; i < ring.size(); ++i)
+    {
+        if (intersects(a, b, ring[i], ring[(i + 1) % ring.size()]))
+            return true;
+    }
+
+    return false;
 }
 
 // Проверяет пересечение границ двух контуров.
@@ -119,12 +136,8 @@ bool boundariesIntersect(const Ring& first, const Ring& second)
 {
     for (std::size_t i = 0; i < first.size(); ++i)
     {
-        for (std::size_t j = 0; j < second.size(); ++j)
-        {
-            if (intersects(first[i], first[(i + 1) % first.size()],
-                           second[j], second[(j + 1) % second.size()]))
-                return true;
-        }
+        if (touchesRing(first[i], first[(i + 1) % first.size()], second))
+            return true;
     }
 
     return false;
@@ -166,13 +179,17 @@ bool validateFootprint(BuildingFootprint& footprint)
 
         if (!readRing(points, hole) || boundariesIntersect(outer, hole) ||
             !inside(outer, hole.front()))
+        {
             return false;
+        }
 
         for (const Ring& other : holes)
         {
             if (boundariesIntersect(other, hole) ||
                 inside(other, hole.front()) || inside(hole, other.front()))
+            {
                 return false;
+            }
         }
 
         holes.push_back(std::move(hole));
@@ -190,9 +207,75 @@ bool accountRing(std::size_t vertices, std::size_t& remaining)
     remaining -= vertices;
     return true;
 }
+
+// Проверяет пересечение ограждения с основанием здания или стеной двора.
+bool conflicts(const PlanSegment& segment, const BuildingFootprint& part)
+{
+    const GridPoint a = toGrid(segment.start);
+    const GridPoint b = toGrid(segment.end);
+
+    // Создаёт целочисленное представление контура.
+    const auto asGrid = [](const std::vector<PlanPoint>& points) {
+        Ring ring;
+        ring.reserve(points.size());
+
+        for (PlanPoint point : points)
+            ring.push_back(toGrid(point));
+
+        return ring;
+    };
+
+    const Ring outer = asGrid(part.outerRing);
+
+    if (touchesRing(a, b, outer))
+        return true;
+
+    if (!inside(outer, a))
+        return false;
+
+    for (const auto& points : part.innerRings)
+    {
+        const Ring hole = asGrid(points);
+
+        if (touchesRing(a, b, hole))
+            return true;
+
+        if (inside(hole, a))
+            return false;
+    }
+
+    return true;
 }
 
-// Проверяет геометрию здания и расположение существующих камер.
+// Проверяет расположение здания относительно камер и ограждений.
+bool fitsPlan(const Building& building, const std::vector<CameraPlacement>& cameras,
+              const std::vector<Fence>& fences)
+{
+    if (!cameras.empty())
+    {
+        const std::vector<Building> footprint{building};
+
+        for (const auto& camera : cameras)
+        {
+            if (!VisibilityCalculator::mountPoint(camera.pose.position, footprint, 0.0))
+                return false;
+        }
+    }
+
+    for (const auto& fence : fences)
+    {
+        for (const auto& part : building.footprints)
+        {
+            if (conflicts(fence.segment, part))
+                return false;
+        }
+    }
+
+    return true;
+}
+}
+
+// Проверяет геометрию здания и его положение на плане.
 std::optional<PlanObjectId> Project::addBuilding(Building building)
 {
     if (nextId_ == 0 || building.footprints.empty())
@@ -200,7 +283,9 @@ std::optional<PlanObjectId> Project::addBuilding(Building building)
 
     if (building.heightMeters &&
         (!std::isfinite(*building.heightMeters) || *building.heightMeters <= 0.0))
+    {
         return std::nullopt;
+    }
 
     std::size_t remaining = maxBuildingVertices;
 
@@ -222,16 +307,8 @@ std::optional<PlanObjectId> Project::addBuilding(Building building)
             return std::nullopt;
     }
 
-    if (!cameras_.empty())
-    {
-        const std::vector<Building> added{building};
-
-        for (const auto& camera : cameras_)
-        {
-            if (!VisibilityCalculator::mountPoint(camera.pose.position, added, 0.0))
-                return std::nullopt;
-        }
-    }
+    if (!fitsPlan(building, cameras_, fences_))
+        return std::nullopt;
 
     building.id = nextId_;
     buildings_.push_back(std::move(building));
@@ -248,7 +325,9 @@ std::optional<PlanObjectId> Project::addTarget(ObservationTarget target)
     {
         if (!isValidPoint(point->position) ||
             !std::isfinite(point->heightMeters) || point->heightMeters < 0.0)
+        {
             return std::nullopt;
+        }
     }
     else
     {
@@ -258,14 +337,17 @@ std::optional<PlanObjectId> Project::addTarget(ObservationTarget target)
             !std::all_of(line.centerline.begin(), line.centerline.end(), isValidPoint) ||
             !std::isfinite(line.heightMeters) || line.heightMeters < 0.0 ||
             !std::isfinite(line.sampleStepMeters) || line.sampleStepMeters <= 0.0)
+        {
             return std::nullopt;
+        }
 
         const PlanPoint first = line.centerline.front();
 
         const bool collapsed = std::all_of(
             line.centerline.begin(), line.centerline.end(),
-            [first](const PlanPoint& p) {
-                return first.xMeters == p.xMeters && first.yMeters == p.yMeters;
+            [first](const PlanPoint& point) {
+                return first.xMeters == point.xMeters &&
+                       first.yMeters == point.yMeters;
             });
 
         if (collapsed)
@@ -304,20 +386,137 @@ std::optional<PlanObjectId> Project::addCamera(CameraPlacement camera)
     return nextId_++;
 }
 
-// Проверяет концы и высоту ограждения.
+// Проверяет длину отрезка и его расположение относительно зданий.
+bool Project::canPlaceFence(const PlanSegment& segment) const
+{
+    if (!isValidPoint(segment.start) || !isValidPoint(segment.end))
+        return false;
+
+    const GridPoint a = toGrid(segment.start);
+    const GridPoint b = toGrid(segment.end);
+
+    if (a.x == b.x && a.y == b.y)
+        return false;
+
+    for (const auto& building : buildings_)
+    {
+        for (const auto& part : building.footprints)
+        {
+            if (conflicts(segment, part))
+                return false;
+        }
+    }
+
+    return true;
+}
+
+// Проверяет и добавляет ограждение.
 std::optional<PlanObjectId> Project::addFence(Fence fence)
 {
-    const auto a = fence.segment.start;
-    const auto b = fence.segment.end;
-
-    if (nextId_ == 0 || !isValidPoint(a) || !isValidPoint(b) ||
-        (a.xMeters == b.xMeters && a.yMeters == b.yMeters) ||
-        !std::isfinite(fence.heightMeters) || fence.heightMeters <= 0.0)
+    if (nextId_ == 0 || !std::isfinite(fence.heightMeters) ||
+        fence.heightMeters <= 0.0 || !canPlaceFence(fence.segment))
+    {
         return std::nullopt;
+    }
 
+    const GridPoint a = toGrid(fence.segment.start);
+    const GridPoint b = toGrid(fence.segment.end);
+
+    fence.segment = {{a.x / 1000.0, a.y / 1000.0},
+                     {b.x / 1000.0, b.y / 1000.0}};
     fence.id = nextId_;
     fences_.push_back(fence);
     return nextId_++;
+}
+
+// Определяет границы прямоугольника, ориентированного вдоль осей плана.
+std::optional<PlanSegment> Project::rectangleBounds(const Building& building)
+{
+    if (building.footprints.size() != 1)
+        return std::nullopt;
+
+    const auto& part = building.footprints.front();
+
+    if (!part.innerRings.empty() || part.outerRing.size() != 4)
+        return std::nullopt;
+
+    PlanPoint low = part.outerRing.front();
+    PlanPoint high = low;
+
+    for (const PlanPoint point : part.outerRing)
+    {
+        low.xMeters = std::min(low.xMeters, point.xMeters);
+        low.yMeters = std::min(low.yMeters, point.yMeters);
+        high.xMeters = std::max(high.xMeters, point.xMeters);
+        high.yMeters = std::max(high.yMeters, point.yMeters);
+    }
+
+    if (low.xMeters >= high.xMeters || low.yMeters >= high.yMeters)
+        return std::nullopt;
+
+    unsigned corners = 0;
+
+    for (const PlanPoint point : part.outerRing)
+    {
+        if ((point.xMeters != low.xMeters && point.xMeters != high.xMeters) ||
+            (point.yMeters != low.yMeters && point.yMeters != high.yMeters))
+        {
+            return std::nullopt;
+        }
+
+        const unsigned index = (point.xMeters == high.xMeters ? 1u : 0u) +
+                               (point.yMeters == high.yMeters ? 2u : 0u);
+
+        corners |= 1u << index;
+    }
+
+    if (corners != 15u)
+        return std::nullopt;
+
+    return PlanSegment{low, high};
+}
+
+// Изменяет прямоугольник относительно его нижнего левого угла.
+bool Project::resizeBuilding(PlanObjectId id, double width, double length, double height)
+{
+    if (!std::isfinite(width) || !std::isfinite(length) || !std::isfinite(height) ||
+        width <= 0.0 || length <= 0.0 || height <= 0.0)
+    {
+        return false;
+    }
+
+    for (Building& building : buildings_)
+    {
+        if (building.id != id)
+            continue;
+
+        const auto bounds = rectangleBounds(building);
+
+        if (!bounds)
+            return false;
+
+        const PlanPoint origin = bounds->start;
+        const PlanPoint end{origin.xMeters + width, origin.yMeters + length};
+
+        Building changed = building;
+        changed.heightMeters = height;
+
+        auto& part = changed.footprints.front();
+        part.outerRing = {
+            origin,
+            {end.xMeters, origin.yMeters},
+            end,
+            {origin.xMeters, end.yMeters}
+        };
+
+        if (!validateFootprint(part) || !fitsPlan(changed, cameras_, fences_))
+            return false;
+
+        building = std::move(changed);
+        return true;
+    }
+
+    return false;
 }
 
 // Возвращает здания проекта.
@@ -399,7 +598,6 @@ bool Project::undoLastAddition()
     const PlanObjectId targetId = targets_.empty() ? 0 : targets_.back().id;
     const PlanObjectId cameraId = cameras_.empty() ? 0 : cameras_.back().id;
     const PlanObjectId fenceId = fences_.empty() ? 0 : fences_.back().id;
-
     const PlanObjectId last = std::max({buildingId, targetId, cameraId, fenceId});
 
     if (last == 0)

@@ -10,15 +10,14 @@
 #include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
-#include <QInputDialog>
 #include <QKeySequence>
+#include <QLabel>
 #include <QPushButton>
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QStatusBar>
 #include <QString>
 #include <QToolBar>
-#include <QVariant>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -41,17 +40,17 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(planView_, &PlanView::pointSelected,
             this, &MainWindow::handlePlanClick);
-
     connect(planView_, &PlanView::cursorMoved,
             this, &MainWindow::updateDrawingPreview);
 
+    // Завершает установку камеры при отпускании кнопки мыши.
     connect(planView_, &PlanView::dragFinished, this, [this](PlanPoint point) {
         if (drawingTool_ == DrawingTool::Camera && cameraOrigin_)
             placeCamera(point);
     });
 
-    setupDrawingTools();
     setupHeights();
+    setupDrawingTools();
 
     auto* cancel = new QShortcut(QKeySequence(Qt::Key_Escape), this);
     connect(cancel, &QShortcut::activated, this, &MainWindow::cancelDrawing);
@@ -73,6 +72,7 @@ void MainWindow::setupDrawingTools()
     auto* toolbar = addToolBar(tr("Инструменты плана"));
     auto* group = new QActionGroup(toolbar);
 
+    // Добавляет кнопку инструмента на панель.
     const auto addTool = [&](const QString& title, DrawingTool tool) {
         auto* action = toolbar->addAction(title);
         action->setCheckable(true);
@@ -86,11 +86,13 @@ void MainWindow::setupDrawingTools()
         return action;
     };
 
-    auto* point = addTool(tr("Точка наблюдения"), DrawingTool::ObservationPoint);
+    auto* select = addTool(tr("Выбор"), DrawingTool::Select);
+    addTool(tr("Точка наблюдения"), DrawingTool::ObservationPoint);
     addTool(tr("Здание"), DrawingTool::Building);
     addTool(tr("Забор"), DrawingTool::Fence);
     addTool(tr("Камера"), DrawingTool::Camera);
 
+    toolbar->addSeparator();
     cameraList_ = new QComboBox(toolbar);
     cameraList_->setToolTip(tr("Камера для расчёта покрытия"));
     cameraList_->addItem(tr("Без выделения"));
@@ -99,106 +101,88 @@ void MainWindow::setupDrawingTools()
     connect(cameraList_, &QComboBox::currentIndexChanged,
             this, &MainWindow::redrawPlan);
 
-    point->setChecked(true);
+    select->setChecked(true);
 }
 
-// Создаёт параметры новых объектов и команду редактирования высоты.
+// Создаёт инспектор параметров инструмента или выбранного объекта.
 void MainWindow::setupHeights()
 {
-    auto* dock = new QDockWidget(tr("Параметры плана"), this);
-    auto* panel = new QWidget(dock);
-    auto* form = new QFormLayout(panel);
+    auto* dock = new QDockWidget(tr("Свойства"), this);
+    dock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
 
-    const auto field = [&](const QString& label, double low, double high, double value) {
+    auto* panel = new QWidget(dock);
+    auto* layout = new QVBoxLayout(panel);
+    layout->setContentsMargins(14, 14, 14, 14);
+
+    propertiesTitle_ = new QLabel(panel);
+    auto titleFont = propertiesTitle_->font();
+    titleFont.setBold(true);
+    propertiesTitle_->setFont(titleFont);
+    layout->addWidget(propertiesTitle_);
+
+    properties_ = new QFormLayout;
+    layout->addLayout(properties_);
+
+    // Добавляет числовое поле с единицей измерения.
+    const auto field = [&](const QString& label, double low, double high,
+                           double value, const QString& unit, int decimals = 2) {
         auto* input = new QDoubleSpinBox(panel);
-        input->setDecimals(2);
+        input->setDecimals(decimals);
         input->setRange(low, high);
         input->setValue(value);
-        form->addRow(label, input);
+        input->setSuffix(unit);
+        input->setKeyboardTracking(false);
+        properties_->addRow(label, input);
         return input;
     };
 
-    cameraZ_ = field(tr("Высота камеры, м"), 0.0, 1000.0, 4.0);
-    tilt_ = field(tr("Наклон вниз, °"), -90.0, 90.0, 12.0);
-    vfov_ = field(tr("Вертикальный угол, °"), 0.1, 180.0, 60.0);
-    targetZ_ = field(tr("Высота цели и среза, м"), 0.0, 1000.0, 1.5);
-    buildingZ_ = field(tr("Высота здания, м"), 0.01, 1000.0, 8.0);
-    fenceZ_ = field(tr("Высота забора, м"), 0.01, 1000.0, 2.0);
+    const QString meters = tr(" м");
+    cameraZ_ = field(tr("Высота"), 0.0, 1000.0, 4.0, meters);
+    tilt_ = field(tr("Наклон вниз"), -90.0, 90.0, 12.0, tr("°"));
+    vfov_ = field(tr("Вертикальный угол"), 0.1, 180.0, 60.0, tr("°"));
+    targetZ_ = field(tr("Высота"), 0.0, 1000.0, 1.5, meters);
+    buildingZ_ = field(tr("Высота"), 0.01, 1000.0, 8.0, meters);
+    fenceZ_ = field(tr("Высота"), 0.01, 1000.0, 2.0, meters);
+    sliceZ_ = field(tr("Высота среза"), 0.0, 1000.0, 1.5, meters);
+    editWidth_ = field(tr("Ширина"), 0.001, 200000.0, 1.0, meters, 3);
+    editLength_ = field(tr("Длина"), 0.001, 200000.0, 1.0, meters, 3);
+    editHeight_ = field(tr("Высота"), 0.0, 1000.0, 0.0, meters, 3);
 
-    objects_ = new QComboBox(panel);
-    form->addRow(tr("Объект проекта"), objects_);
+    propertiesMessage_ = new QLabel(panel);
+    propertiesMessage_->setWordWrap(true);
+    layout->addWidget(propertiesMessage_);
 
-    auto* edit = new QPushButton(tr("Изменить высоту объекта"), panel);
-    form->addRow(edit);
+    apply_ = new QPushButton(tr("Применить"), panel);
+    layout->addWidget(apply_);
+    layout->addStretch();
 
-    connect(edit, &QPushButton::clicked, this, [this] {
-        if (objects_->currentIndex() < 0)
-            return;
-
-        const auto id = objects_->currentData().toULongLong();
-        double current = 0.0;
-        double minimum = 0.0;
-
-        for (const auto& building : project_.buildings())
-        {
-            if (building.id == id)
-            {
-                current = building.heightMeters.value_or(8.0);
-                minimum = 0.01;
-            }
-        }
-
-        for (const auto& fence : project_.fences())
-        {
-            if (fence.id == id)
-            {
-                current = fence.heightMeters;
-                minimum = 0.01;
-            }
-        }
-
-        for (const auto& camera : project_.cameras())
-        {
-            if (camera.id == id)
-                current = camera.pose.heightMeters;
-        }
-
-        for (const auto& target : project_.targets())
-        {
-            if (target.id == id)
-            {
-                current = std::visit(
-                    [](const auto& geometry) { return geometry.heightMeters; },
-                    target.geometry);
-            }
-        }
-
-        bool accepted = false;
-        const double meters = QInputDialog::getDouble(
-            this, objects_->currentText(), tr("Высота, м"),
-            current, minimum, 1000.0, 2, &accepted);
-
-        if (accepted && project_.setHeight(id, meters))
-            redrawPlan();
-    });
-
-    connect(targetZ_, &QDoubleSpinBox::valueChanged, this, &MainWindow::redrawPlan);
+    connect(apply_, &QPushButton::clicked, this, &MainWindow::applyProperties);
+    connect(editWidth_, &QDoubleSpinBox::valueChanged, this, &MainWindow::previewResize);
+    connect(editLength_, &QDoubleSpinBox::valueChanged, this, &MainWindow::previewResize);
+    connect(sliceZ_, &QDoubleSpinBox::valueChanged, this, &MainWindow::redrawPlan);
 
     dock->setWidget(panel);
     addDockWidget(Qt::RightDockWidgetArea, dock);
 }
 
-// Переключает инструмент и сбрасывает предварительное построение.
+// Переключает инструмент и завершает текущее взаимодействие.
 void MainWindow::selectDrawingTool(DrawingTool tool)
 {
     drawingTool_ = tool;
+    selectedId_ = 0;
     cameraOrigin_.reset();
     firstBuildingCorner_.reset();
     fenceStart_.reset();
-    planView_->hidePreview();
+
+    updateInspector();
+    redrawPlan();
 
     switch (tool)
     {
+    case DrawingTool::Select:
+        statusBar()->showMessage(tr("Щёлкните по объекту на плане."));
+        break;
+
     case DrawingTool::ObservationPoint:
         statusBar()->showMessage(tr("Укажите положение цели."));
         break;
@@ -212,7 +196,8 @@ void MainWindow::selectDrawingTool(DrawingTool tool)
         break;
 
     case DrawingTool::Camera:
-        statusBar()->showMessage(tr("Зажмите левую кнопку и выберите направление."));
+        statusBar()->showMessage(
+            tr("Зажмите левую кнопку и выберите направление."));
         break;
     }
 }
@@ -222,6 +207,10 @@ void MainWindow::handlePlanClick(PlanPoint position)
 {
     switch (drawingTool_)
     {
+    case DrawingTool::Select:
+        selectObject(position);
+        break;
+
     case DrawingTool::ObservationPoint:
         addObservationPoint(position);
         break;
@@ -240,7 +229,7 @@ void MainWindow::handlePlanClick(PlanPoint position)
     }
 }
 
-// Обновляет предварительное изображение здания или камеры.
+// Обновляет предварительное изображение строящегося объекта.
 void MainWindow::updateDrawingPreview(PlanPoint position)
 {
     if (firstBuildingCorner_)
@@ -249,26 +238,31 @@ void MainWindow::updateDrawingPreview(PlanPoint position)
         return;
     }
 
+    if (fenceStart_)
+    {
+        const PlanSegment segment{*fenceStart_, position};
+        planView_->showFencePreview(segment, project_.canPlaceFence(segment));
+        return;
+    }
+
     if (cameraOrigin_)
     {
         const auto angle = VisibilityCalculator::bearing(*cameraOrigin_, position);
 
         if (angle)
-        {
-            const auto camera = makeCamera(*cameraOrigin_, *angle);
-            planView_->previewCamera(camera, project_, targetZ_->value());
-        }
+            planView_->previewCamera(makeCamera(*cameraOrigin_, *angle),
+                                     project_, sliceZ_->value());
     }
 }
 
-// Отменяет незавершённое построение.
+// Отменяет незавершённое построение или снимает выделение.
 void MainWindow::cancelDrawing()
 {
-    if (firstBuildingCorner_ || cameraOrigin_ || fenceStart_)
+    if (firstBuildingCorner_ || cameraOrigin_ || fenceStart_ || selectedId_ != 0)
         selectDrawingTool(drawingTool_);
 }
 
-// Отменяет последнее добавление объекта.
+// Отменяет строящийся объект или последнее добавление.
 void MainWindow::undoLastAction()
 {
     if (firstBuildingCorner_ || cameraOrigin_ || fenceStart_)
@@ -279,7 +273,7 @@ void MainWindow::undoLastAction()
 
     if (!project_.undoLastAddition())
     {
-        statusBar()->showMessage(tr("Нет действий для отмены."));
+        statusBar()->showMessage(tr("Нет добавлений для отмены."));
         return;
     }
 
@@ -289,12 +283,13 @@ void MainWindow::undoLastAction()
         cameraList_->removeItem(cameraList_->count() - 1);
     }
 
-    objects_->removeItem(objects_->count() - 1);
+    selectedId_ = 0;
+    updateInspector();
     redrawPlan();
     statusBar()->showMessage(tr("Последнее добавление отменено."));
 }
 
-// Возвращает камеру по строке списка.
+// Возвращает камеру по строке списка покрытия.
 const CameraPlacement* MainWindow::selectedCamera() const
 {
     const int index = cameraList_->currentIndex() - 1;
@@ -311,7 +306,7 @@ void MainWindow::redrawPlan()
     planView_->clearPlan();
 
     for (const auto& building : project_.buildings())
-        planView_->drawBuilding(building);
+        planView_->drawBuilding(building, building.id == selectedId_);
 
     for (const auto& fence : project_.fences())
         planView_->drawFence(fence);
@@ -319,7 +314,7 @@ void MainWindow::redrawPlan()
     const auto* selected = selectedCamera();
 
     for (const auto& camera : project_.cameras())
-        planView_->drawCamera(camera, &camera == selected, project_, targetZ_->value());
+        planView_->drawCamera(camera, &camera == selected, project_, sliceZ_->value());
 
     for (const auto& target : project_.targets())
     {
@@ -328,24 +323,12 @@ void MainWindow::redrawPlan()
             const bool covered = selected && VisibilityCalculator::visible(
                                      *selected, *point, project_.buildings(), project_.fences());
 
-            planView_->drawObservationPoint(point->position, covered);
+            planView_->drawObservationPoint(point->position, covered, target.id);
         }
     }
 }
 
-// Добавляет объект в список изменения высоты.
-void MainWindow::rememberObject(const QString& type, PlanObjectId id)
-{
-    const auto number = static_cast<qulonglong>(id);
-
-    objects_->addItem(
-        tr("%1 №%2").arg(type).arg(number),
-        QVariant::fromValue(number));
-
-    objects_->setCurrentIndex(objects_->count() - 1);
-}
-
-// Создаёт цель на высоте, выбранной в панели параметров.
+// Создаёт цель на высоте, выбранной в панели свойств.
 void MainWindow::addObservationPoint(PlanPoint position)
 {
     ObservationTarget target;
@@ -360,7 +343,6 @@ void MainWindow::addObservationPoint(PlanPoint position)
         return;
     }
 
-    rememberObject(tr("Цель"), *id);
     redrawPlan();
 
     statusBar()->showMessage(
@@ -380,7 +362,7 @@ void MainWindow::addBuildingCorner(PlanPoint position)
         return;
     }
 
-    const auto first = *firstBuildingCorner_;
+    const PlanPoint first = *firstBuildingCorner_;
     const double left = std::min(first.xMeters, position.xMeters);
     const double right = std::max(first.xMeters, position.xMeters);
     const double bottom = std::min(first.yMeters, position.yMeters);
@@ -406,14 +388,12 @@ void MainWindow::addBuildingCorner(PlanPoint position)
     if (!id)
     {
         statusBar()->showMessage(
-            tr("Проверьте контур здания и расположение установленных камер."));
+            tr("Проверьте контур здания, расположение камер и ограждений."));
         return;
     }
 
     firstBuildingCorner_.reset();
-    rememberObject(tr("Здание"), *id);
     redrawPlan();
-
     statusBar()->showMessage(tr("Здание добавлено. Укажите первый угол следующего."));
 }
 
@@ -423,6 +403,7 @@ void MainWindow::addFencePoint(PlanPoint point)
     if (!fenceStart_)
     {
         fenceStart_ = point;
+        planView_->showFencePreview({point, point}, true);
         statusBar()->showMessage(tr("Укажите конец ограждения. Esc — отмена."));
         return;
     }
@@ -435,19 +416,19 @@ void MainWindow::addFencePoint(PlanPoint point)
 
     if (!id)
     {
-        statusBar()->showMessage(tr("Выберите другую конечную точку."));
+        planView_->showFencePreview(fence.segment, false);
+        statusBar()->showMessage(
+            tr("Выберите отрезок ненулевой длины вне стен и контура здания."));
         return;
     }
 
     fenceStart_.reset();
-    rememberObject(tr("Забор"), *id);
     redrawPlan();
-
     statusBar()->showMessage(tr("Ограждение добавлено."));
 }
 
 // Формирует камеру по параметрам панели.
-CameraPlacement MainWindow::makeCamera(PlanPoint at, double angle) const
+CameraPlacement MainWindow::makeCamera(PlanPoint position, double angle) const
 {
     CameraPlacement camera;
     camera.model.name = "Учебная модель";
@@ -455,7 +436,7 @@ CameraPlacement MainWindow::makeCamera(PlanPoint at, double angle) const
     camera.model.horizontalFovDegrees = 90.0;
     camera.model.verticalFovDegrees = vfov_->value();
 
-    camera.pose.position = at;
+    camera.pose.position = position;
     camera.pose.heightMeters = cameraZ_->value();
     camera.pose.azimuthDegrees = angle;
     camera.pose.tiltDegrees = tilt_->value();
@@ -481,7 +462,7 @@ void MainWindow::placeCamera(PlanPoint position)
         }
 
         planView_->previewCamera(makeCamera(*cameraOrigin_, 0.0),
-                                 project_, targetZ_->value());
+                                 project_, sliceZ_->value());
 
         statusBar()->showMessage(
             tr("Поверните камеру. Отпустите кнопку или щёлкните для установки."));
@@ -497,7 +478,6 @@ void MainWindow::placeCamera(PlanPoint position)
     }
 
     const auto id = project_.addCamera(makeCamera(*cameraOrigin_, *angle));
-
     cameraOrigin_.reset();
     planView_->hidePreview();
 
@@ -507,12 +487,212 @@ void MainWindow::placeCamera(PlanPoint position)
         return;
     }
 
-    rememberObject(tr("Камера"), *id);
-
-    cameraList_->addItem(
-        tr("Камера №%1").arg(static_cast<qulonglong>(*id)));
-
+    cameraList_->addItem(tr("Камера №%1").arg(static_cast<qulonglong>(*id)));
     cameraList_->setCurrentIndex(cameraList_->count() - 1);
 
     statusBar()->showMessage(tr("Камера установлена. Покрытие рассчитано."));
+}
+
+// Выбирает объект плана и обновляет его свойства.
+void MainWindow::selectObject(PlanPoint point)
+{
+    selectedId_ = planView_->objectAt(point);
+
+    const auto& cameras = project_.cameras();
+    const auto camera = std::find_if(
+        cameras.begin(), cameras.end(),
+        [this](const CameraPlacement& item) { return item.id == selectedId_; });
+
+    if (camera != cameras.end())
+    {
+        const QSignalBlocker blocker(cameraList_);
+        cameraList_->setCurrentIndex(static_cast<int>(camera - cameras.begin()) + 1);
+    }
+
+    updateInspector();
+    redrawPlan();
+}
+
+// Возвращает здание по идентификатору выделения.
+const Building* MainWindow::selectedBuilding() const
+{
+    const auto& buildings = project_.buildings();
+    const auto found = std::find_if(
+        buildings.begin(), buildings.end(),
+        [this](const Building& item) { return item.id == selectedId_; });
+
+    return found != buildings.end() ? &*found : nullptr;
+}
+
+// Показывает параметры активного инструмента или выбранного объекта.
+void MainWindow::updateInspector()
+{
+    for (auto* input : {cameraZ_, tilt_, vfov_, targetZ_, buildingZ_, fenceZ_,
+                        sliceZ_, editWidth_, editLength_, editHeight_})
+    {
+        properties_->setRowVisible(input, false);
+    }
+
+    apply_->hide();
+    propertiesMessage_->clear();
+    propertiesMessage_->hide();
+
+    switch (drawingTool_)
+    {
+    case DrawingTool::Building:
+        propertiesTitle_->setText(tr("Новое здание"));
+        properties_->setRowVisible(buildingZ_, true);
+        return;
+
+    case DrawingTool::Fence:
+        propertiesTitle_->setText(tr("Новый забор"));
+        properties_->setRowVisible(fenceZ_, true);
+        return;
+
+    case DrawingTool::ObservationPoint:
+        propertiesTitle_->setText(tr("Новая точка наблюдения"));
+        properties_->setRowVisible(targetZ_, true);
+        return;
+
+    case DrawingTool::Camera:
+        propertiesTitle_->setText(tr("Новая камера"));
+
+        for (auto* input : {cameraZ_, tilt_, vfov_, sliceZ_})
+            properties_->setRowVisible(input, true);
+
+        return;
+
+    case DrawingTool::Select:
+        break;
+    }
+
+    QString name;
+    double height = 0.0;
+    double minimum = 0.0;
+
+    if (const auto* building = selectedBuilding())
+    {
+        name = tr("Здание");
+        height = building->heightMeters.value_or(buildingZ_->value());
+        minimum = 0.001;
+
+        if (!building->heightMeters)
+        {
+            propertiesMessage_->setText(
+                tr("Высота здания не задана. Укажите значение перед сохранением."));
+            propertiesMessage_->show();
+        }
+
+        if (const auto bounds = Project::rectangleBounds(*building))
+        {
+            const QSignalBlocker blockWidth(editWidth_);
+            const QSignalBlocker blockLength(editLength_);
+
+            editWidth_->setValue(bounds->end.xMeters - bounds->start.xMeters);
+            editLength_->setValue(bounds->end.yMeters - bounds->start.yMeters);
+
+            properties_->setRowVisible(editWidth_, true);
+            properties_->setRowVisible(editLength_, true);
+        }
+    }
+
+    for (const auto& fence : project_.fences())
+    {
+        if (fence.id == selectedId_)
+        {
+            name = tr("Забор");
+            height = fence.heightMeters;
+            minimum = 0.001;
+        }
+    }
+
+    for (const auto& target : project_.targets())
+    {
+        if (target.id == selectedId_)
+        {
+            name = tr("Точка наблюдения");
+            height = std::visit(
+                [](const auto& shape) { return shape.heightMeters; }, target.geometry);
+        }
+    }
+
+    for (const auto& camera : project_.cameras())
+    {
+        if (camera.id == selectedId_)
+        {
+            name = tr("Камера");
+            height = camera.pose.heightMeters;
+            properties_->setRowVisible(sliceZ_, true);
+        }
+    }
+
+    if (name.isEmpty())
+    {
+        propertiesTitle_->setText(tr("Выберите объект на плане"));
+        return;
+    }
+
+    propertiesTitle_->setText(
+        tr("%1 №%2").arg(name).arg(static_cast<qulonglong>(selectedId_)));
+
+    editHeight_->setRange(minimum, std::max(1000.0, height));
+    editHeight_->setValue(height);
+    properties_->setRowVisible(editHeight_, true);
+    apply_->show();
+}
+
+// Рисует предполагаемый контур с закреплённым нижним левым углом.
+void MainWindow::previewResize()
+{
+    const auto* building = selectedBuilding();
+
+    if (!building)
+        return;
+
+    const auto bounds = Project::rectangleBounds(*building);
+
+    if (!bounds)
+        return;
+
+    const PlanPoint origin = bounds->start;
+    const PlanPoint end{
+        origin.xMeters + editWidth_->value(),
+        origin.yMeters + editLength_->value()
+    };
+
+    planView_->showBuildingPreview(origin, end);
+}
+
+// Сохраняет свойства и пересчитывает покрытие после проверки.
+void MainWindow::applyProperties()
+{
+    if (selectedId_ == 0)
+        return;
+
+    const auto* building = selectedBuilding();
+    bool saved = false;
+
+    if (building && Project::rectangleBounds(*building))
+    {
+        saved = project_.resizeBuilding(
+            selectedId_, editWidth_->value(), editLength_->value(), editHeight_->value());
+    }
+    else
+    {
+        saved = project_.setHeight(selectedId_, editHeight_->value());
+    }
+
+    if (!saved)
+    {
+        propertiesMessage_->setText(
+            tr("Проверьте размеры и высоту. Новый контур должен проходить вне "
+               "ограждений и установленных камер."));
+        propertiesMessage_->show();
+        planView_->hidePreview();
+        return;
+    }
+
+    updateInspector();
+    redrawPlan();
+    statusBar()->showMessage(tr("Свойства сохранены."), 3000);
 }

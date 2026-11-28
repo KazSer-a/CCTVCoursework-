@@ -5,11 +5,14 @@
 #include <QGraphicsView>
 #include <QPoint>
 
+class QGraphicsLineItem;
 class QGraphicsPathItem;
 class QGraphicsRectItem;
+class QLabel;
 class QMouseEvent;
+class QWheelEvent;
 
-// Графическое представление плана.
+// Отображает план и обрабатывает управление сценой.
 class PlanView : public QGraphicsView
 {
     Q_OBJECT
@@ -18,13 +21,14 @@ public:
     // Создаёт сцену плана.
     explicit PlanView(QWidget* parent = nullptr);
 
-    // Отображает части здания и дворы.
-    void drawBuilding(const Building& building);
+    // Отображает здание и выделяет его контур при выборе.
+    void drawBuilding(const Building& building, bool selected = false);
 
     // Отображает точечную цель.
-    void drawObservationPoint(const PlanPoint& position, bool covered = false);
+    void drawObservationPoint(const PlanPoint& position, bool covered = false,
+                              PlanObjectId id = 0);
 
-    // Отображает камеру и покрытие выбранной высоты.
+    // Отображает камеру и покрытие на выбранной высоте.
     void drawCamera(const CameraPlacement& camera, bool selected,
                     const Project& project, double z);
 
@@ -34,8 +38,14 @@ public:
     // Отображает ограждение.
     void drawFence(const Fence& fence);
 
-    // Обновляет прямоугольник строящегося здания.
+    // Возвращает идентификатор объекта в указанной точке.
+    PlanObjectId objectAt(PlanPoint point) const;
+
+    // Показывает прямоугольник и размеры строящегося здания.
     void showBuildingPreview(const PlanPoint& first, const PlanPoint& second);
+
+    // Показывает строящееся ограждение и его длину.
+    void showFencePreview(const PlanSegment& segment, bool allowed);
 
     // Скрывает элементы предварительного построения.
     void hidePreview();
@@ -54,6 +64,15 @@ signals:
     void dragFinished(PlanPoint position);
 
 protected:
+    // Рисует сетку под объектами плана.
+    void drawBackground(QPainter* painter, const QRectF& rect) override;
+
+    // Изменяет масштаб относительно курсора.
+    void wheelEvent(QWheelEvent* event) override;
+
+    // Показывает подсказку высоты возле объекта.
+    bool viewportEvent(QEvent* event) override;
+
     // Обрабатывает нажатие кнопки мыши.
     void mousePressEvent(QMouseEvent* event) override;
 
@@ -64,7 +83,15 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
 
 private:
+    // Показывает размеры рядом с точкой построения.
+    void showDimensions(const QString& text, PlanPoint position);
+
+    QLabel* dimensions_ = nullptr;
     QPoint pressPosition_;
+    QPoint panPosition_;
+    bool panning_ = false;
+    bool leftPressed_ = false;
+    QGraphicsLineItem* fencePreview_ = nullptr;
     QGraphicsRectItem* buildingPreview_ = nullptr;
     QGraphicsPathItem* cameraPreview_ = nullptr;
 };

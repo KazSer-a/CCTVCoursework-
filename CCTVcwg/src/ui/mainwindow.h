@@ -3,6 +3,7 @@
 #include "../model/Project.h"
 
 #include <QMainWindow>
+
 #include <optional>
 
 QT_BEGIN_NAMESPACE
@@ -15,6 +16,9 @@ QT_END_NAMESPACE
 class PlanView;
 class QComboBox;
 class QDoubleSpinBox;
+class QFormLayout;
+class QLabel;
+class QPushButton;
 
 // Главное окно редактора плана.
 class MainWindow : public QMainWindow
@@ -29,9 +33,10 @@ public:
     ~MainWindow() override;
 
 private:
-    // Инструменты редактирования плана.
+    // Режимы взаимодействия с планом.
     enum class DrawingTool
     {
+        Select,
         ObservationPoint,
         Building,
         Camera,
@@ -41,7 +46,7 @@ private:
     // Создаёт панель инструментов.
     void setupDrawingTools();
 
-    // Создаёт панель параметров высоты.
+    // Создаёт контекстную панель свойств.
     void setupHeights();
 
     // Переключает активный инструмент.
@@ -53,7 +58,7 @@ private:
     // Обновляет предварительную геометрию.
     void updateDrawingPreview(PlanPoint position);
 
-    // Сбрасывает незавершённое построение.
+    // Сбрасывает незавершённое построение или выбор объекта.
     void cancelDrawing();
 
     // Отменяет построение или последнее добавление.
@@ -75,28 +80,50 @@ private:
     void placeCamera(PlanPoint position);
 
     // Формирует камеру по параметрам панели.
-    CameraPlacement makeCamera(PlanPoint at, double angle) const;
+    CameraPlacement makeCamera(PlanPoint position, double angle) const;
 
     // Возвращает выбранную для расчёта камеру.
     const CameraPlacement* selectedCamera() const;
 
-    // Добавляет объект в список изменения высоты.
-    void rememberObject(const QString& type, PlanObjectId id);
+    // Выбирает объект под курсором.
+    void selectObject(PlanPoint point);
+
+    // Обновляет поля текущего режима.
+    void updateInspector();
+
+    // Сохраняет параметры выделенного объекта.
+    void applyProperties();
+
+    // Показывает контур здания с введёнными размерами.
+    void previewResize();
+
+    // Возвращает выбранное здание.
+    const Building* selectedBuilding() const;
 
     Ui::MainWindow* ui;
     Project project_;
     PlanView* planView_;
 
     QComboBox* cameraList_ = nullptr;
-    QComboBox* objects_ = nullptr;
+    QFormLayout* properties_ = nullptr;
+    QLabel* propertiesTitle_ = nullptr;
+    QLabel* propertiesMessage_ = nullptr;
+    QPushButton* apply_ = nullptr;
+
     QDoubleSpinBox* cameraZ_ = nullptr;
     QDoubleSpinBox* targetZ_ = nullptr;
     QDoubleSpinBox* buildingZ_ = nullptr;
     QDoubleSpinBox* fenceZ_ = nullptr;
     QDoubleSpinBox* tilt_ = nullptr;
     QDoubleSpinBox* vfov_ = nullptr;
+    QDoubleSpinBox* sliceZ_ = nullptr;
+    QDoubleSpinBox* editWidth_ = nullptr;
+    QDoubleSpinBox* editLength_ = nullptr;
+    QDoubleSpinBox* editHeight_ = nullptr;
 
-    DrawingTool drawingTool_ = DrawingTool::ObservationPoint;
+    PlanObjectId selectedId_ = 0;
+    DrawingTool drawingTool_ = DrawingTool::Select;
+
     std::optional<PlanPoint> firstBuildingCorner_;
     std::optional<PlanPoint> fenceStart_;
     std::optional<PlanPoint> cameraOrigin_;

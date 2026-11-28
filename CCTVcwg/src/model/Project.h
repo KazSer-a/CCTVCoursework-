@@ -5,7 +5,7 @@
 #include <optional>
 #include <vector>
 
-// План объекта и операции изменения его состава.
+// Хранит объекты плана и проверяет операции редактирования.
 class Project
 {
 public:
@@ -18,8 +18,17 @@ public:
     // Проверяет и добавляет камеру.
     std::optional<PlanObjectId> addCamera(CameraPlacement camera);
 
+    // Проверяет допустимость отрезка ограждения.
+    bool canPlaceFence(const PlanSegment& segment) const;
+
     // Проверяет и добавляет ограждение.
     std::optional<PlanObjectId> addFence(Fence fence);
+
+    // Возвращает противоположные углы прямоугольного здания.
+    static std::optional<PlanSegment> rectangleBounds(const Building& building);
+
+    // Изменяет размеры и высоту прямоугольного здания после проверки.
+    bool resizeBuilding(PlanObjectId id, double width, double length, double height);
 
     // Возвращает здания проекта.
     const std::vector<Building>& buildings() const;
