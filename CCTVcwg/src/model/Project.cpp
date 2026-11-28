@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -247,9 +248,27 @@ bool conflicts(const PlanSegment& segment, const BuildingFootprint& part)
     return true;
 }
 
-// Проверяет расположение здания относительно камер и ограждений.
+// Проверяет пересечение полосы дороги с основанием здания.
+bool roadConflicts(const BuildingFootprint& road, const BuildingFootprint& building)
+{
+    Ring roadRing;
+    for (const auto& point : road.outerRing)
+        roadRing.push_back(toGrid(point));
+
+    for (std::size_t i = 0; i < road.outerRing.size(); ++i)
+    {
+        const auto& points = road.outerRing;
+        if (conflicts({points[i], points[(i + 1) % points.size()]}, building))
+            return true;
+    }
+
+    return std::any_of(building.outerRing.begin(), building.outerRing.end(),
+                       [&](PlanPoint point) { return inside(roadRing, toGrid(point)); });
+}
+
+// Проверяет расположение здания относительно камер, ограждений и дорог.
 bool fitsPlan(const Building& building, const std::vector<CameraPlacement>& cameras,
-              const std::vector<Fence>& fences)
+              const std::vector<Fence>& fences, const std::vector<Road>& roads)
 {
     if (!cameras.empty())
     {
@@ -271,6 +290,15 @@ bool fitsPlan(const Building& building, const std::vector<CameraPlacement>& came
         }
     }
 
+    for (const auto& road : roads)
+    {
+        const auto footprint = Project::roadFootprint(road);
+        if (!footprint)
+            continue;
+        for (const auto& part : building.footprints)
+            if (roadConflicts(*footprint, part))
+                return false;
+    }
     return true;
 }
 }
@@ -307,7 +335,11 @@ std::optional<PlanObjectId> Project::addBuilding(Building building)
             return std::nullopt;
     }
 
-    if (!fitsPlan(building, cameras_, fences_))
+    for (const auto& pole : poles_)
+        if (!VisibilityCalculator::mountPoint(pole.position, {building}, 0.0))
+            return std::nullopt;
+
+    if (!fitsPlan(building, cameras_, fences_, roads_))
         return std::nullopt;
 
     building.id = nextId_;
@@ -350,7 +382,7 @@ std::optional<PlanObjectId> Project::addTarget(ObservationTarget target)
                        first.yMeters == point.yMeters;
             });
 
-        if (collapsed)
+        if (collapsed || sampleLine(line).empty())
             return std::nullopt;
     }
 
@@ -378,7 +410,8 @@ std::optional<PlanObjectId> Project::addCamera(CameraPlacement camera)
         return std::nullopt;
     }
 
-    if (!VisibilityCalculator::mountPoint(pose.position, buildings_, 0.0))
+    if (isMountForbidden(pose.position) ||
+        !VisibilityCalculator::mountPoint(pose.position, buildings_, 0.0))
         return std::nullopt;
 
     camera.id = nextId_;
@@ -502,16 +535,21 @@ bool Project::resizeBuilding(PlanObjectId id, double width, double length, doubl
         changed.heightMeters = height;
 
         auto& part = changed.footprints.front();
-        part.outerRing = {
-            origin,
-            {end.xMeters, origin.yMeters},
-            end,
-            {origin.xMeters, end.yMeters}
-        };
+        for (auto& vertex : part.outerRing)
+        {
+            if (vertex.xMeters == bounds->end.xMeters)
+                vertex.xMeters = end.xMeters;
+            if (vertex.yMeters == bounds->end.yMeters)
+                vertex.yMeters = end.yMeters;
+        }
 
-        if (!validateFootprint(part) || !fitsPlan(changed, cameras_, fences_))
+        if (!validateFootprint(part) || !fitsPlan(changed, cameras_, fences_, roads_))
             return false;
 
+        for (const auto& pole : poles_)
+            if (!VisibilityCalculator::mountPoint(pole.position, {changed}, 0.0))
+                return false;
+        rememberEdit(building);
         building = std::move(changed);
         return true;
     }
@@ -553,6 +591,7 @@ bool Project::setHeight(PlanObjectId id, double meters)
     {
         if (building.id == id && meters > 0.0)
         {
+            rememberEdit(building);
             building.heightMeters = meters;
             return true;
         }
@@ -562,6 +601,7 @@ bool Project::setHeight(PlanObjectId id, double meters)
     {
         if (fence.id == id && meters > 0.0)
         {
+            rememberEdit(fence);
             fence.heightMeters = meters;
             return true;
         }
@@ -571,6 +611,7 @@ bool Project::setHeight(PlanObjectId id, double meters)
     {
         if (camera.id == id)
         {
+            rememberEdit(camera);
             camera.pose.heightMeters = meters;
             return true;
         }
@@ -580,6 +621,7 @@ bool Project::setHeight(PlanObjectId id, double meters)
     {
         if (target.id == id)
         {
+            rememberEdit(target);
             std::visit([meters](auto& geometry) {
                 geometry.heightMeters = meters;
             }, target.geometry);
@@ -588,6 +630,15 @@ bool Project::setHeight(PlanObjectId id, double meters)
         }
     }
 
+    for (auto& pole : poles_)
+    {
+        if (pole.id == id && meters > 0.0)
+        {
+            rememberEdit(pole);
+            pole.heightMeters = meters;
+            return true;
+        }
+    }
     return false;
 }
 
@@ -598,12 +649,22 @@ bool Project::undoLastAddition()
     const PlanObjectId targetId = targets_.empty() ? 0 : targets_.back().id;
     const PlanObjectId cameraId = cameras_.empty() ? 0 : cameras_.back().id;
     const PlanObjectId fenceId = fences_.empty() ? 0 : fences_.back().id;
-    const PlanObjectId last = std::max({buildingId, targetId, cameraId, fenceId});
+    const auto poleId = poles_.empty() ? 0 : poles_.back().id;
+    const auto banId = bans_.empty() ? 0 : bans_.back().id;
+    const auto roadId = roads_.empty() ? 0 : roads_.back().id;
+    const PlanObjectId last = std::max({buildingId, targetId, cameraId, fenceId,
+                                        poleId, banId, roadId});
 
     if (last == 0)
         return false;
 
-    if (last == fenceId)
+    if (last == roadId)
+        roads_.pop_back();
+    else if (last == poleId)
+        poles_.pop_back();
+    else if (last == banId)
+        bans_.pop_back();
+    else if (last == fenceId)
         fences_.pop_back();
     else if (last == cameraId)
         cameras_.pop_back();
@@ -614,3 +675,376 @@ bool Project::undoLastAddition()
 
     return true;
 }
+
+// Вычисляет положение на отрезке по доле его длины.
+static PlanPoint interpolate(const PlanSegment& segment, double fraction)
+{
+    return {segment.start.xMeters + fraction * (segment.end.xMeters - segment.start.xMeters),
+            segment.start.yMeters + fraction * (segment.end.yMeters - segment.start.yMeters)};
+}
+
+// Формирует точки на ломаной, включая её вершины.
+std::vector<ObservationPoint> Project::sampleLine(const ObservationLine& line)
+{
+    constexpr std::size_t maxSamples = 4096;
+    if (line.centerline.size() < 2 || !std::isfinite(line.sampleStepMeters) ||
+        line.sampleStepMeters <= 0.0)
+        return {};
+
+    std::vector<ObservationPoint> points{{line.centerline.front(), line.heightMeters}};
+    for (std::size_t i = 1; i < line.centerline.size(); ++i)
+    {
+        const PlanSegment segment{line.centerline[i - 1], line.centerline[i]};
+        const double length = std::hypot(segment.end.xMeters - segment.start.xMeters,
+                                         segment.end.yMeters - segment.start.yMeters);
+        const double divisions = std::ceil(length / line.sampleStepMeters);
+        if (!std::isfinite(divisions) || divisions > maxSamples - points.size())
+            return {};
+
+        const auto count = static_cast<std::size_t>(divisions);
+        for (std::size_t j = 1; j <= count; ++j)
+        {
+            const auto point = j == count ? segment.end
+                                          : interpolate(segment, static_cast<double>(j) / count);
+            points.push_back({point, line.heightMeters});
+        }
+    }
+    return points.size() > 1 ? std::move(points) : std::vector<ObservationPoint>{};
+}
+
+// Проверяет и добавляет отдельную монтажную опору.
+std::optional<PlanObjectId> Project::addPole(MountPole pole)
+{
+    if (nextId_ == 0 || !isValidPoint(pole.position) ||
+        !std::isfinite(pole.heightMeters) || pole.heightMeters <= 0 ||
+        !VisibilityCalculator::mountPoint(pole.position, buildings_, 0.0))
+        return std::nullopt;
+
+    pole.id = nextId_;
+    poles_.push_back(pole);
+    return nextId_++;
+}
+
+// Возвращает контур по его индексу.
+static const std::vector<PlanPoint>& facadeRing(const BuildingFootprint& part, std::size_t ring)
+{
+    return ring == 0 ? part.outerRing : part.innerRings[ring - 1];
+}
+
+// Проверяет индексы и возвращает геометрию ребра.
+std::optional<PlanSegment> Project::facadeSegment(const FacadeEdge& facade) const
+{
+    for (const auto& building : buildings_)
+    {
+        if (building.id != facade.buildingId || facade.footprint >= building.footprints.size())
+            continue;
+
+        const auto& part = building.footprints[facade.footprint];
+        if (facade.ring > part.innerRings.size())
+            return std::nullopt;
+        const auto& ring = facadeRing(part, facade.ring);
+        if (facade.edge < ring.size())
+            return PlanSegment{ring[facade.edge], ring[(facade.edge + 1) % ring.size()]};
+    }
+    return std::nullopt;
+}
+
+// Находит ближайшее ребро в заданном радиусе.
+std::optional<FacadeEdge> Project::facadeAt(PlanPoint point, double tolerance,
+                                            PlanObjectId onlyBuilding) const
+{
+    if (!isValidPoint(point) || !std::isfinite(tolerance) || tolerance < 0)
+        return std::nullopt;
+
+    std::optional<FacadeEdge> result;
+    double best = tolerance * tolerance;
+    for (const auto& building : buildings_)
+    {
+        if (onlyBuilding != 0 && building.id != onlyBuilding)
+            continue;
+
+        for (std::size_t partIndex = 0; partIndex < building.footprints.size(); ++partIndex)
+        {
+            const auto& part = building.footprints[partIndex];
+            for (std::size_t ringIndex = 0; ringIndex <= part.innerRings.size(); ++ringIndex)
+            {
+                const auto& ring = facadeRing(part, ringIndex);
+                for (std::size_t edge = 0; edge < ring.size(); ++edge)
+                {
+                    const PlanSegment segment{ring[edge], ring[(edge + 1) % ring.size()]};
+                    const auto dx = segment.end.xMeters - segment.start.xMeters;
+                    const auto dy = segment.end.yMeters - segment.start.yMeters;
+                    const auto x = point.xMeters - segment.start.xMeters;
+                    const auto y = point.yMeters - segment.start.yMeters;
+                    const double fraction = std::clamp((x * dx + y * dy) / (dx * dx + dy * dy),
+                                                       0.0, 1.0);
+                    const double distance = std::hypot(x - fraction * dx, y - fraction * dy);
+                    if (distance * distance <= best)
+                    {
+                        best = distance * distance;
+                        result = FacadeEdge{building.id, partIndex, ringIndex, edge};
+                    }
+                }
+            }
+        }
+    }
+    return result;
+}
+
+// Проверяет границы запрета и сохраняет его на выбранном ребре.
+std::optional<PlanObjectId> Project::addFacadeBan(FacadeBan ban)
+{
+    if (nextId_ == 0 || !(0 <= ban.from && ban.from < ban.to && ban.to <= 1) ||
+        !facadeSegment(ban.facade))
+        return std::nullopt;
+
+    ban.id = nextId_;
+    bans_.push_back(ban);
+    return nextId_++;
+}
+
+// Преобразует относительные границы запрета в координаты плана.
+std::optional<PlanSegment> Project::bannedSegment(const FacadeBan& ban) const
+{
+    const auto edge = facadeSegment(ban.facade);
+    if (!edge)
+        return std::nullopt;
+
+    return PlanSegment{interpolate(*edge, ban.from), interpolate(*edge, ban.to)};
+}
+
+// Проверяет, входит ли допустимая позиция в один из запретов данного ребра.
+bool Project::facadeMountAllowed(const FacadeEdge& facade, double fraction) const
+{
+    if (!(0 <= fraction && fraction <= 1) || !facadeSegment(facade))
+        return false;
+
+    for (const auto& ban : bans_)
+    {
+        const auto& edge = ban.facade;
+        if (edge.buildingId == facade.buildingId && edge.footprint == facade.footprint &&
+            edge.ring == facade.ring && edge.edge == facade.edge &&
+            fraction >= ban.from && fraction <= ban.to)
+            return false;
+    }
+    return true;
+}
+
+// Запоминает удаляемый объект и освобождает его место в коллекции.
+bool Project::deleteObject(PlanObjectId id)
+{
+    const auto erase = [&](auto& collection) {
+        const auto found = std::find_if(collection.begin(), collection.end(),
+                                        [id](const auto& item) { return item.id == id; });
+        if (found == collection.end())
+            return false;
+
+        Deletion action{nextId_ - 1, *found, {}};
+        if constexpr (std::is_same_v<std::decay_t<decltype(*found)>, Building>)
+            for (const auto& ban : bans_)
+                if (ban.facade.buildingId == id)
+                    action.bans.push_back(ban);
+
+        deletions_.push_back(std::move(action));
+        collection.erase(found);
+        if constexpr (std::is_same_v<std::decay_t<decltype(*found)>, Building>)
+            bans_.erase(std::remove_if(bans_.begin(), bans_.end(),
+                                       [id](const FacadeBan& ban) { return ban.facade.buildingId == id; }), bans_.end());
+        return true;
+    };
+
+    return id != 0 && (erase(buildings_) || erase(targets_) || erase(cameras_) ||
+                       erase(fences_) || erase(poles_) || erase(bans_) || erase(roads_));
+}
+
+// Восстанавливает объект по идентификатору, сохраняя порядок коллекции.
+template<class Object>
+static void restoreObject(std::vector<Object>& collection, Object object, bool replacesExisting = false)
+{
+    const auto position = std::lower_bound(collection.begin(), collection.end(), object.id,
+                                           [](const Object& item, PlanObjectId id) { return item.id < id; });
+    if (replacesExisting)
+        *position = std::move(object);
+    else
+        collection.insert(position, std::move(object));
+}
+
+// Отменяет добавление либо восстанавливает удалённый объект.
+bool Project::undoLastAction()
+{
+    if (deletions_.empty())
+        return undoLastAddition();
+
+    const auto latest = [](const auto& collection) -> PlanObjectId {
+        return collection.empty() ? 0 : collection.back().id;
+    };
+
+    const auto last = std::max({latest(buildings_), latest(targets_), latest(cameras_),
+                                latest(fences_), latest(poles_), latest(bans_), latest(roads_)});
+    auto& action = deletions_.back();
+    if (last > action.lastIssued)
+        return undoLastAddition();
+
+    std::visit([&](auto& object) {
+        using Object = std::decay_t<decltype(object)>;
+        if constexpr (std::is_same_v<Object, Building>)
+            restoreObject(buildings_, std::move(object), action.replacesExisting);
+        else if constexpr (std::is_same_v<Object, ObservationTarget>)
+            restoreObject(targets_, std::move(object), action.replacesExisting);
+        else if constexpr (std::is_same_v<Object, CameraPlacement>)
+            restoreObject(cameras_, std::move(object), action.replacesExisting);
+        else if constexpr (std::is_same_v<Object, Fence>)
+            restoreObject(fences_, std::move(object), action.replacesExisting);
+        else if constexpr (std::is_same_v<Object, MountPole>)
+            restoreObject(poles_, std::move(object), action.replacesExisting);
+        else if constexpr (std::is_same_v<Object, Road>)
+            restoreObject(roads_, std::move(object), action.replacesExisting);
+        else
+            restoreObject(bans_, std::move(object), action.replacesExisting);
+    }, action.object);
+
+    for (auto& ban : action.bans)
+        restoreObject(bans_, std::move(ban));
+    deletions_.pop_back();
+    return true;
+}
+
+
+// Проецирует точку на отрезок и ограничивает проекцию его концами.
+double Project::segmentFraction(const PlanSegment& segment, PlanPoint point)
+{
+    const double x = segment.end.xMeters - segment.start.xMeters;
+    const double y = segment.end.yMeters - segment.start.yMeters;
+    const double lengthSquared = x * x + y * y;
+    if (lengthSquared == 0.0)
+        return 0.0;
+
+    const double dot = (point.xMeters - segment.start.xMeters) * x +
+                       (point.yMeters - segment.start.yMeters) * y;
+    return std::clamp(dot / lengthSquared, 0.0, 1.0);
+}
+
+// Проверяет совпадение точки крепления с запрещённым отрезком.
+bool Project::isMountForbidden(PlanPoint point) const
+{
+    constexpr double toleranceMeters = 1e-7;
+    for (const auto& ban : bans_)
+    {
+        const auto segment = bannedSegment(ban);
+        if (!segment)
+            continue;
+        const auto nearest = interpolate(*segment, segmentFraction(*segment, point));
+        if (std::hypot(point.xMeters - nearest.xMeters, point.yMeters - nearest.yMeters)
+            <= toleranceMeters)
+            return true;
+    }
+    return false;
+}
+
+// Строит полосу постоянной ширины вокруг прямой оси.
+std::optional<BuildingFootprint> Project::roadFootprint(const Road& road)
+{
+    if (road.centerline.size() != 2 || !isValidPoint(road.centerline.front()) ||
+        !isValidPoint(road.centerline.back()) || !std::isfinite(road.widthMeters) ||
+        road.widthMeters < 0.1 || road.widthMeters > 1000.0)
+        return std::nullopt;
+
+    const auto a = road.centerline.front();
+    const auto b = road.centerline.back();
+    const double dx = b.xMeters - a.xMeters;
+    const double dy = b.yMeters - a.yMeters;
+    const double length = std::hypot(dx, dy);
+    if (length < 0.01)
+        return std::nullopt;
+
+    const double x = -dy / length * (road.widthMeters / 2.0);
+    const double y = dx / length * (road.widthMeters / 2.0);
+    BuildingFootprint part;
+    part.outerRing = {{a.xMeters + x, a.yMeters + y}, {b.xMeters + x, b.yMeters + y},
+                      {b.xMeters - x, b.yMeters - y}, {a.xMeters - x, a.yMeters - y}};
+
+    if (!validateFootprint(part))
+        return std::nullopt;
+    return part;
+}
+
+// Проверяет полосу дороги относительно оснований зданий.
+bool Project::canPlaceRoad(const Road& road) const
+{
+    const auto footprint = roadFootprint(road);
+    if (!footprint)
+        return false;
+    for (const auto& building : buildings_)
+        for (const auto& part : building.footprints)
+            if (roadConflicts(*footprint, part))
+                return false;
+    return true;
+}
+
+// Добавляет проверенную дорогу.
+std::optional<PlanObjectId> Project::addRoad(Road road)
+{
+    if (nextId_ == 0 || !canPlaceRoad(road))
+        return std::nullopt;
+    road.id = nextId_;
+    roads_.push_back(std::move(road));
+    return nextId_++;
+}
+
+// Меняет ширину дороги с возможностью отмены.
+bool Project::setRoadWidth(PlanObjectId id, double width)
+{
+    const auto road = std::find_if(roads_.begin(), roads_.end(),
+                                   [id](const Road& item) { return item.id == id; });
+    if (road == roads_.end())
+        return false;
+
+    Road changed = *road;
+    changed.widthMeters = width;
+    if (!canPlaceRoad(changed))
+        return false;
+
+    rememberEdit(*road);
+    *road = std::move(changed);
+    return true;
+}
+
+// Привязывает камеру к ближайшей опоре или фасаду.
+std::optional<CameraPose> Project::snapCameraMount(PlanPoint point, double height,
+                                                   double radius) const
+{
+    if (!isValidPoint(point) || !std::isfinite(height) || height < 0 ||
+        !std::isfinite(radius) || radius < 0)
+        return std::nullopt;
+
+    const auto wall = VisibilityCalculator::mountPoint(point, buildings_, radius);
+    if (!wall)
+        return std::nullopt;
+
+    double best = radius;
+    if (const auto edge = facadeAt(point, radius))
+    {
+        if (const auto segment = facadeSegment(*edge))
+        {
+            const auto nearest = interpolate(*segment, segmentFraction(*segment, point));
+            best = std::hypot(point.xMeters - nearest.xMeters, point.yMeters - nearest.yMeters);
+        }
+    }
+
+    CameraPose result;
+    result.position = *wall;
+    result.heightMeters = height;
+    for (const auto& pole : poles_)
+    {
+        const double distance = std::hypot(point.xMeters - pole.position.xMeters,
+                                           point.yMeters - pole.position.yMeters);
+        if (distance <= best)
+        {
+            best = distance;
+            result.position = pole.position;
+            result.heightMeters = pole.heightMeters;
+        }
+    }
+    return result;
+}
+

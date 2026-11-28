@@ -40,7 +40,11 @@ private:
         ObservationPoint,
         Building,
         Camera,
-        Fence
+        Fence,
+        ObservationLine,
+        Pole,
+        FacadeBan,
+        Road
     };
 
     // Создаёт панель инструментов.
@@ -100,6 +104,35 @@ private:
     // Возвращает выбранное здание.
     const Building* selectedBuilding() const;
 
+    // Принимает концы отрезка наблюдения.
+    void addLinePoint(PlanPoint point);
+
+    // Добавляет опору или запрет по щелчку.
+    void addPoleAt(PlanPoint point);
+    void addBanAt(PlanPoint point);
+
+    // Удаляет выбранный объект.
+    void deleteSelected();
+
+    // Перестраивает список камер и восстанавливает выбор по идентификатору.
+    void syncCameraList(PlanObjectId active);
+
+    QPushButton* deleteButton_ = nullptr;
+    QDoubleSpinBox* lineStep_ = nullptr;
+    QDoubleSpinBox* lineHeight_ = nullptr;
+    QDoubleSpinBox* poleHeight_ = nullptr;
+    // Формирует интервал на закреплённом фасаде.
+    FacadeBan banAt(PlanPoint point) const;
+
+    // Принимает концы осевой линии дороги.
+    void addRoadPoint(PlanPoint point);
+
+    QDoubleSpinBox* roadWidth_ = nullptr;
+    std::optional<PlanPoint> roadStart_;
+    std::optional<FacadeBan> banStart_;
+    std::optional<double> cameraMountHeight_;
+    std::optional<PlanPoint> lineStart_;
+
     Ui::MainWindow* ui;
     Project project_;
     PlanView* planView_;
@@ -128,3 +161,4 @@ private:
     std::optional<PlanPoint> fenceStart_;
     std::optional<PlanPoint> cameraOrigin_;
 };
+

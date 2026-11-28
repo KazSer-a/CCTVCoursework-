@@ -12,6 +12,7 @@
 #include <QFormLayout>
 #include <QKeySequence>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QShortcut>
 #include <QSignalBlocker>
@@ -21,6 +22,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <utility>
 #include <variant>
@@ -47,10 +49,19 @@ MainWindow::MainWindow(QWidget* parent)
     connect(planView_, &PlanView::dragFinished, this, [this](PlanPoint point) {
         if (drawingTool_ == DrawingTool::Camera && cameraOrigin_)
             placeCamera(point);
+        else if (drawingTool_ == DrawingTool::FacadeBan && banStart_)
+            addBanAt(point);
+        else if (drawingTool_ == DrawingTool::Road && roadStart_)
+            addRoadPoint(point);
     });
 
     setupHeights();
     setupDrawingTools();
+
+    auto* remove = new QShortcut(QKeySequence(Qt::Key_Delete), planView_);
+    remove->setContext(Qt::WidgetWithChildrenShortcut);
+    remove->setAutoRepeat(false);
+    connect(remove, &QShortcut::activated, this, &MainWindow::deleteSelected);
 
     auto* cancel = new QShortcut(QKeySequence(Qt::Key_Escape), this);
     connect(cancel, &QShortcut::activated, this, &MainWindow::cancelDrawing);
@@ -90,6 +101,10 @@ void MainWindow::setupDrawingTools()
     addTool(tr("Точка наблюдения"), DrawingTool::ObservationPoint);
     addTool(tr("Здание"), DrawingTool::Building);
     addTool(tr("Забор"), DrawingTool::Fence);
+    addTool(tr("Линия наблюдения"), DrawingTool::ObservationLine);
+    addTool(tr("Опора"), DrawingTool::Pole);
+    addTool(tr("Запрет монтажа"), DrawingTool::FacadeBan);
+    addTool(tr("Дорога"), DrawingTool::Road);
     addTool(tr("Камера"), DrawingTool::Camera);
 
     toolbar->addSeparator();
@@ -148,12 +163,20 @@ void MainWindow::setupHeights()
     editLength_ = field(tr("Длина"), 0.001, 200000.0, 1.0, meters, 3);
     editHeight_ = field(tr("Высота"), 0.0, 1000.0, 0.0, meters, 3);
 
+    lineStep_ = field(tr("Шаг точек"), 0.1, 1000, 2, meters);
+    lineHeight_ = field(tr("Высота"), 0, 1000, 1.5, meters);
+    poleHeight_ = field(tr("Высота крепления"), 0.01, 1000, 3, meters);
+    roadWidth_ = field(tr("Ширина дороги"), 0.1, 1000.0, 4.0, meters);
+
     propertiesMessage_ = new QLabel(panel);
     propertiesMessage_->setWordWrap(true);
     layout->addWidget(propertiesMessage_);
 
     apply_ = new QPushButton(tr("Применить"), panel);
     layout->addWidget(apply_);
+    deleteButton_ = new QPushButton(tr("Удалить"), panel);
+    layout->addWidget(deleteButton_);
+    connect(deleteButton_, &QPushButton::clicked, this, &MainWindow::deleteSelected);
     layout->addStretch();
 
     connect(apply_, &QPushButton::clicked, this, &MainWindow::applyProperties);
@@ -171,14 +194,30 @@ void MainWindow::selectDrawingTool(DrawingTool tool)
     drawingTool_ = tool;
     selectedId_ = 0;
     cameraOrigin_.reset();
+    cameraMountHeight_.reset();
+    banStart_.reset();
+    roadStart_.reset();
     firstBuildingCorner_.reset();
     fenceStart_.reset();
+    lineStart_.reset();
 
     updateInspector();
     redrawPlan();
 
     switch (tool)
     {
+    case DrawingTool::ObservationLine:
+        statusBar()->showMessage(tr("Укажите начало линии наблюдения."));
+        break;
+    case DrawingTool::Pole:
+        statusBar()->showMessage(tr("Укажите место монтажной опоры."));
+        break;
+    case DrawingTool::Road:
+        statusBar()->showMessage(tr("Укажите начало осевой линии дороги."));
+        break;
+    case DrawingTool::FacadeBan:
+        statusBar()->showMessage(tr("Начните запрет на фасаде и протяните его вдоль стены."));
+        break;
     case DrawingTool::Select:
         statusBar()->showMessage(tr("Щёлкните по объекту на плане."));
         break;
@@ -207,6 +246,18 @@ void MainWindow::handlePlanClick(PlanPoint position)
 {
     switch (drawingTool_)
     {
+    case DrawingTool::ObservationLine:
+        addLinePoint(position);
+        break;
+    case DrawingTool::Pole:
+        addPoleAt(position);
+        break;
+    case DrawingTool::Road:
+        addRoadPoint(position);
+        break;
+    case DrawingTool::FacadeBan:
+        addBanAt(position);
+        break;
     case DrawingTool::Select:
         selectObject(position);
         break;
@@ -232,6 +283,26 @@ void MainWindow::handlePlanClick(PlanPoint position)
 // Обновляет предварительное изображение строящегося объекта.
 void MainWindow::updateDrawingPreview(PlanPoint position)
 {
+    if (banStart_)
+    {
+        if (const auto segment = project_.bannedSegment(banAt(position)))
+            planView_->showFencePreview(*segment, false);
+        return;
+    }
+
+    if (roadStart_)
+    {
+        const Road road{0, {*roadStart_, position}, roadWidth_->value()};
+        planView_->previewRoad(road, project_.canPlaceRoad(road));
+        return;
+    }
+
+    if (lineStart_)
+    {
+        planView_->showFencePreview({*lineStart_, position}, true);
+        return;
+    }
+
     if (firstBuildingCorner_)
     {
         planView_->showBuildingPreview(*firstBuildingCorner_, position);
@@ -258,35 +329,32 @@ void MainWindow::updateDrawingPreview(PlanPoint position)
 // Отменяет незавершённое построение или снимает выделение.
 void MainWindow::cancelDrawing()
 {
-    if (firstBuildingCorner_ || cameraOrigin_ || fenceStart_ || selectedId_ != 0)
+    if (firstBuildingCorner_ || cameraOrigin_ || fenceStart_ || lineStart_ || banStart_ || roadStart_ || selectedId_ != 0)
         selectDrawingTool(drawingTool_);
 }
 
 // Отменяет строящийся объект или последнее добавление.
 void MainWindow::undoLastAction()
 {
-    if (firstBuildingCorner_ || cameraOrigin_ || fenceStart_)
+    if (firstBuildingCorner_ || cameraOrigin_ || fenceStart_ || lineStart_ || banStart_ || roadStart_)
     {
         cancelDrawing();
         return;
     }
 
-    if (!project_.undoLastAddition())
+    const auto* camera = selectedCamera();
+    const PlanObjectId active = camera ? camera->id : 0;
+    if (!project_.undoLastAction())
     {
-        statusBar()->showMessage(tr("Нет добавлений для отмены."));
+        statusBar()->showMessage(tr("Нет действий для отмены."));
         return;
     }
 
-    if (cameraList_->count() - 1 > static_cast<int>(project_.cameras().size()))
-    {
-        const QSignalBlocker blocker(cameraList_);
-        cameraList_->removeItem(cameraList_->count() - 1);
-    }
-
+    syncCameraList(active);
     selectedId_ = 0;
     updateInspector();
     redrawPlan();
-    statusBar()->showMessage(tr("Последнее добавление отменено."));
+    statusBar()->showMessage(tr("Последнее действие отменено."));
 }
 
 // Возвращает камеру по строке списка покрытия.
@@ -305,6 +373,9 @@ void MainWindow::redrawPlan()
 {
     planView_->clearPlan();
 
+    for (const auto& road : project_.roads())
+        planView_->drawRoad(road, road.id == selectedId_);
+
     for (const auto& building : project_.buildings())
         planView_->drawBuilding(building, building.id == selectedId_);
 
@@ -316,6 +387,13 @@ void MainWindow::redrawPlan()
     for (const auto& camera : project_.cameras())
         planView_->drawCamera(camera, &camera == selected, project_, sliceZ_->value());
 
+    for (const auto& pole : project_.poles())
+        planView_->drawPole(pole, pole.id == selectedId_);
+
+    for (const auto& ban : project_.facadeBans())
+        if (const auto segment = project_.bannedSegment(ban))
+            planView_->drawSegment(*segment, ban.id, true, ban.id == selectedId_);
+
     for (const auto& target : project_.targets())
     {
         if (const auto* point = std::get_if<ObservationPoint>(&target.geometry))
@@ -324,6 +402,19 @@ void MainWindow::redrawPlan()
                                      *selected, *point, project_.buildings(), project_.fences());
 
             planView_->drawObservationPoint(point->position, covered, target.id);
+        }
+        else if (const auto* line = std::get_if<ObservationLine>(&target.geometry))
+        {
+            for (std::size_t i = 1; i < line->centerline.size(); ++i)
+                planView_->drawSegment({line->centerline[i - 1], line->centerline[i]},
+                                       target.id, false, target.id == selectedId_);
+
+            for (const auto& sample : Project::sampleLine(*line))
+            {
+                const bool visible = selected && VisibilityCalculator::visible(
+                                         *selected, sample, project_.buildings(), project_.fences());
+                planView_->drawObservationPoint(sample.position, visible, target.id);
+            }
         }
     }
 }
@@ -437,7 +528,7 @@ CameraPlacement MainWindow::makeCamera(PlanPoint position, double angle) const
     camera.model.verticalFovDegrees = vfov_->value();
 
     camera.pose.position = position;
-    camera.pose.heightMeters = cameraZ_->value();
+    camera.pose.heightMeters = cameraMountHeight_.value_or(cameraZ_->value());
     camera.pose.azimuthDegrees = angle;
     camera.pose.tiltDegrees = tilt_->value();
 
@@ -451,16 +542,24 @@ void MainWindow::placeCamera(PlanPoint position)
     {
         constexpr double snapMeters = 0.5;
 
-        cameraOrigin_ = VisibilityCalculator::mountPoint(
-            position, project_.buildings(), snapMeters);
+        const auto mount = project_.snapCameraMount(
+            position, cameraZ_->value(), snapMeters);
 
-        if (!cameraOrigin_)
+        if (!mount)
         {
             statusBar()->showMessage(
                 tr("Камера внутри здания. Выберите фасад или наружную точку."));
             return;
         }
 
+        if (project_.isMountForbidden(mount->position))
+        {
+            statusBar()->showMessage(tr("На этом участке фасада монтаж запрещён."));
+            return;
+        }
+
+        cameraOrigin_ = mount->position;
+        cameraMountHeight_ = mount->heightMeters;
         planView_->previewCamera(makeCamera(*cameraOrigin_, 0.0),
                                  project_, sliceZ_->value());
 
@@ -479,6 +578,7 @@ void MainWindow::placeCamera(PlanPoint position)
 
     const auto id = project_.addCamera(makeCamera(*cameraOrigin_, *angle));
     cameraOrigin_.reset();
+    cameraMountHeight_.reset();
     planView_->hidePreview();
 
     if (!id)
@@ -496,6 +596,7 @@ void MainWindow::placeCamera(PlanPoint position)
 // Выбирает объект плана и обновляет его свойства.
 void MainWindow::selectObject(PlanPoint point)
 {
+    planView_->setFocus();
     selectedId_ = planView_->objectAt(point);
 
     const auto& cameras = project_.cameras();
@@ -528,17 +629,35 @@ const Building* MainWindow::selectedBuilding() const
 void MainWindow::updateInspector()
 {
     for (auto* input : {cameraZ_, tilt_, vfov_, targetZ_, buildingZ_, fenceZ_,
-                        sliceZ_, editWidth_, editLength_, editHeight_})
+                        sliceZ_, editWidth_, editLength_, editHeight_,
+                        lineStep_, lineHeight_, poleHeight_, roadWidth_})
     {
         properties_->setRowVisible(input, false);
     }
 
     apply_->hide();
+    deleteButton_->hide();
     propertiesMessage_->clear();
     propertiesMessage_->hide();
 
     switch (drawingTool_)
     {
+    case DrawingTool::ObservationLine:
+        propertiesTitle_->setText(tr("Линия наблюдения"));
+        properties_->setRowVisible(lineHeight_, true);
+        properties_->setRowVisible(lineStep_, true);
+        return;
+    case DrawingTool::Pole:
+        propertiesTitle_->setText(tr("Монтажная опора"));
+        properties_->setRowVisible(poleHeight_, true);
+        return;
+    case DrawingTool::FacadeBan:
+        propertiesTitle_->setText(tr("Запрет на фасаде"));
+        return;
+    case DrawingTool::Road:
+        propertiesTitle_->setText(tr("Новая дорога"));
+        properties_->setRowVisible(roadWidth_, true);
+        return;
     case DrawingTool::Building:
         propertiesTitle_->setText(tr("Новое здание"));
         properties_->setRowVisible(buildingZ_, true);
@@ -610,7 +729,8 @@ void MainWindow::updateInspector()
     {
         if (target.id == selectedId_)
         {
-            name = tr("Точка наблюдения");
+            name = std::holds_alternative<ObservationLine>(target.geometry)
+            ? tr("Линия наблюдения") : tr("Точка наблюдения");
             height = std::visit(
                 [](const auto& shape) { return shape.heightMeters; }, target.geometry);
         }
@@ -626,6 +746,36 @@ void MainWindow::updateInspector()
         }
     }
 
+    for (const auto& pole : project_.poles())
+        if (pole.id == selectedId_)
+        {
+            name = tr("Опора");
+            height = pole.heightMeters;
+            minimum = 0.001;
+        }
+
+    for (const auto& ban : project_.facadeBans())
+        if (ban.id == selectedId_)
+        {
+            propertiesTitle_->setText(tr("Запрет №%1")
+                                          .arg(static_cast<qulonglong>(ban.id)));
+            deleteButton_->show();
+            return;
+        }
+
+    for (const auto& road : project_.roads())
+    {
+        if (road.id != selectedId_)
+            continue;
+        propertiesTitle_->setText(tr("Дорога №%1").arg(static_cast<qulonglong>(road.id)));
+        const QSignalBlocker blocker(editWidth_);
+        editWidth_->setValue(road.widthMeters);
+        properties_->setRowVisible(editWidth_, true);
+        apply_->show();
+        deleteButton_->show();
+        return;
+    }
+
     if (name.isEmpty())
     {
         propertiesTitle_->setText(tr("Выберите объект на плане"));
@@ -639,11 +789,22 @@ void MainWindow::updateInspector()
     editHeight_->setValue(height);
     properties_->setRowVisible(editHeight_, true);
     apply_->show();
+    deleteButton_->show();
 }
 
 // Рисует предполагаемый контур с закреплённым нижним левым углом.
 void MainWindow::previewResize()
 {
+    for (const auto& road : project_.roads())
+    {
+        if (road.id != selectedId_)
+            continue;
+        Road draft = road;
+        draft.widthMeters = editWidth_->value();
+        planView_->previewRoad(draft, project_.canPlaceRoad(draft));
+        return;
+    }
+
     const auto* building = selectedBuilding();
 
     if (!building)
@@ -668,6 +829,23 @@ void MainWindow::applyProperties()
 {
     if (selectedId_ == 0)
         return;
+
+    const auto road = std::find_if(project_.roads().begin(), project_.roads().end(),
+                                   [this](const Road& item) { return item.id == selectedId_; });
+    if (road != project_.roads().end())
+    {
+        if (!project_.setRoadWidth(selectedId_, editWidth_->value()))
+        {
+            propertiesMessage_->setText(tr("Проверьте ширину и пересечение со зданием."));
+            propertiesMessage_->show();
+            planView_->hidePreview();
+            return;
+        }
+        redrawPlan();
+        updateInspector();
+        statusBar()->showMessage(tr("Ширина дороги изменена."), 3000);
+        return;
+    }
 
     const auto* building = selectedBuilding();
     bool saved = false;
@@ -696,3 +874,156 @@ void MainWindow::applyProperties()
     redrawPlan();
     statusBar()->showMessage(tr("Свойства сохранены."), 3000);
 }
+
+// Создаёт линию по двум точкам с заданным шагом.
+void MainWindow::addLinePoint(PlanPoint point)
+{
+    if (!lineStart_)
+    {
+        lineStart_ = point;
+        statusBar()->showMessage(tr("Укажите конец линии. Esc — отмена."));
+        return;
+    }
+
+    ObservationTarget target;
+    target.label = "Линия наблюдения";
+    target.geometry = ObservationLine{{*lineStart_, point},
+                                      lineHeight_->value(), lineStep_->value()};
+    if (!project_.addTarget(std::move(target)))
+    {
+        statusBar()->showMessage(tr("Проверьте длину и шаг. Максимум 4096 контрольных точек."));
+        return;
+    }
+
+    lineStart_.reset();
+    redrawPlan();
+    statusBar()->showMessage(tr("Линия наблюдения добавлена."), 3000);
+}
+
+// Добавляет опору с текущей высотой крепления.
+void MainWindow::addPoleAt(PlanPoint point)
+{
+    if (!project_.addPole({0, point, poleHeight_->value()}))
+    {
+        statusBar()->showMessage(tr("Выберите место опоры вне здания."));
+        return;
+    }
+    redrawPlan();
+    statusBar()->showMessage(tr("Монтажная опора добавлена."), 3000);
+}
+
+// Вычисляет запрещённый интервал на одном закреплённом ребре.
+FacadeBan MainWindow::banAt(PlanPoint point) const
+{
+    FacadeBan ban = *banStart_;
+    if (const auto segment = project_.facadeSegment(ban.facade))
+    {
+        const double end = Project::segmentFraction(*segment, point);
+        ban.from = std::min(banStart_->from, end);
+        ban.to = std::max(banStart_->from, end);
+    }
+    return ban;
+}
+
+// Прикрепляет начало запрета к фасаду и завершает интервал.
+void MainWindow::addBanAt(PlanPoint point)
+{
+    if (!banStart_)
+    {
+        const auto edge = project_.facadeAt(point, planView_->facadePickTolerance());
+        if (!edge)
+        {
+            statusBar()->showMessage(tr("Щёлкните ближе к краю здания."));
+            return;
+        }
+        const auto segment = project_.facadeSegment(*edge);
+        if (!segment)
+            return;
+        const double from = Project::segmentFraction(*segment, point);
+        banStart_ = FacadeBan{0, *edge, from, from};
+        statusBar()->showMessage(tr("Протяните запрет вдоль фасада. Esc — отмена."));
+        return;
+    }
+
+    if (!project_.addFacadeBan(banAt(point)))
+    {
+        statusBar()->showMessage(tr("Протяните запрет дальше вдоль фасада."));
+        return;
+    }
+    banStart_.reset();
+    redrawPlan();
+    statusBar()->showMessage(tr("Запрет монтажа добавлен."), 3000);
+}
+
+// Добавляет полосу дороги по двум точкам оси.
+void MainWindow::addRoadPoint(PlanPoint point)
+{
+    if (!roadStart_)
+    {
+        roadStart_ = point;
+        statusBar()->showMessage(tr("Укажите конец дороги. Esc — отмена."));
+        return;
+    }
+
+    const Road road{0, {*roadStart_, point}, roadWidth_->value()};
+    if (!project_.addRoad(road))
+    {
+        planView_->previewRoad(road, false);
+        statusBar()->showMessage(tr("Проверьте длину, ширину и пересечение со зданием."));
+        return;
+    }
+    roadStart_.reset();
+    redrawPlan();
+    statusBar()->showMessage(tr("Дорога добавлена."), 3000);
+}
+
+// Обновляет список после удаления или восстановления камеры.
+void MainWindow::syncCameraList(PlanObjectId active)
+{
+    const QSignalBlocker blocker(cameraList_);
+    cameraList_->clear();
+    cameraList_->addItem(tr("Без выделения"));
+
+    int index = 0;
+    for (const auto& camera : project_.cameras())
+    {
+        cameraList_->addItem(tr("Камера №%1").arg(static_cast<qulonglong>(camera.id)));
+        if (camera.id == active)
+            index = cameraList_->count() - 1;
+    }
+    cameraList_->setCurrentIndex(index);
+}
+
+// Удаляет объект выбранного инструмента и обновляет расчёт.
+void MainWindow::deleteSelected()
+{
+    if (drawingTool_ != DrawingTool::Select || selectedId_ == 0)
+        return;
+
+    if (const auto* building = selectedBuilding())
+    {
+        const auto camerasOnWall = std::count_if(
+            project_.cameras().begin(), project_.cameras().end(),
+            [&](const CameraPlacement& camera) {
+                return project_.facadeAt(camera.pose.position, 1e-7, building->id).has_value();
+            });
+
+        if (camerasOnWall > 0 && QMessageBox::question(this, tr("Удалить здание?"),
+                                                       tr("Камер на фасаде: %1. Они сохранят свои координаты.").arg(static_cast<qlonglong>(camerasOnWall)),
+                                                       QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+            return;
+    }
+
+    const auto* camera = selectedCamera();
+    const PlanObjectId active = camera ? camera->id : 0;
+    if (!project_.deleteObject(selectedId_))
+        return;
+
+    selectedId_ = 0;
+    syncCameraList(active);
+    updateInspector();
+    redrawPlan();
+    statusBar()->showMessage(tr("Объект удалён. Ctrl+Z — восстановить."), 3000);
+}
+
+

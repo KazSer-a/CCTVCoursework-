@@ -402,6 +402,8 @@ void PlanView::hidePreview()
     QToolTip::hideText();
     dimensions_->hide();
 
+    if (roadPreview_)
+        roadPreview_->hide();
     if (fencePreview_)
         fencePreview_->hide();
 
@@ -416,6 +418,7 @@ void PlanView::hidePreview()
 void PlanView::clearPlan()
 {
     hidePreview();
+    roadPreview_ = nullptr;
     fencePreview_ = nullptr;
     cameraPreview_ = nullptr;
     buildingPreview_ = nullptr;
@@ -558,3 +561,86 @@ void PlanView::mouseReleaseEvent(QMouseEvent* event)
 
     event->accept();
 }
+
+// Отображает линию наблюдения либо красный запрет на фасаде.
+void PlanView::drawSegment(const PlanSegment& segment, PlanObjectId id,
+                           bool forbidden, bool selected)
+{
+    QPen pen(forbidden ? QColor(195, 55, 65) : QColor(35, 110, 165));
+    pen.setWidth(selected ? 4 : 2);
+    pen.setCosmetic(true);
+    if (forbidden)
+        pen.setStyle(Qt::DashLine);
+
+    auto* item = scene()->addLine(
+        QLineF(toScenePoint(segment.start), toScenePoint(segment.end)), pen);
+    item->setZValue(1.3);
+    item->setData(objectIdRole, QVariant::fromValue<qulonglong>(id));
+}
+
+// Помечает опору на плане и показывает высоту крепления.
+void PlanView::drawPole(const MountPole& pole, bool selected)
+{
+    const QColor color = selected ? QColor(30, 100, 210) : QColor(121, 73, 153);
+    auto* item = scene()->addRect(-5, -5, 10, 10, QPen(color, 2), QBrush(Qt::white));
+    item->setFlag(QGraphicsItem::ItemIgnoresTransformations);
+    item->setPos(toScenePoint(pole.position));
+    item->setZValue(1.5);
+    item->setData(objectIdRole, QVariant::fromValue<qulonglong>(pole.id));
+    item->setToolTip(tr("Высота крепления %1 м").arg(pole.heightMeters));
+}
+
+// Переводит допуск в восемь экранных пикселей в метры плана.
+double PlanView::facadePickTolerance() const
+{
+    return 8.0 / transform().m11();
+}
+
+
+// Отображает полосу дороги в реальном масштабе.
+void PlanView::drawRoad(const Road& road, bool selected)
+{
+    const auto part = Project::roadFootprint(road);
+    if (!part)
+        return;
+
+    QPen outline(selected ? QColor(30, 100, 210) : QColor(103, 112, 122));
+    outline.setCosmetic(true);
+    outline.setWidth(selected ? 2 : 1);
+    auto* item = scene()->addPath(footprintPath(*part), outline,
+                                  QBrush(QColor(189, 195, 201)));
+    item->setZValue(-1.0);
+    item->setData(objectIdRole, QVariant::fromValue<qulonglong>(road.id));
+    item->setToolTip(tr("Ширина %1 м").arg(road.widthMeters));
+}
+
+// Показывает полосу и отмечает конфликт красным цветом.
+void PlanView::previewRoad(const Road& road, bool allowed)
+{
+    const auto part = Project::roadFootprint(road);
+    if (!part)
+    {
+        if (roadPreview_)
+            roadPreview_->hide();
+        return;
+    }
+
+    if (!roadPreview_)
+    {
+        roadPreview_ = scene()->addPath(QPainterPath());
+        roadPreview_->setAcceptedMouseButtons(Qt::NoButton);
+        roadPreview_->setZValue(2.5);
+    }
+
+    const QColor color = allowed ? QColor(72, 114, 154, 110) : QColor(195, 55, 65, 120);
+    roadPreview_->setPen(QPen(Qt::NoPen));
+    roadPreview_->setBrush(QBrush(color));
+    roadPreview_->setPath(footprintPath(*part));
+    roadPreview_->show();
+    const auto a = toScenePoint(road.centerline.front());
+    const auto b = toScenePoint(road.centerline.back());
+    showDimensions(tr("%1 м × %2 м").arg(QLineF(a, b).length(), 0, 'f', 2)
+                       .arg(road.widthMeters, 0, 'f', 2),
+                   road.centerline.back());
+}
+

@@ -38,6 +38,22 @@ public:
     // Отображает ограждение.
     void drawFence(const Fence& fence);
 
+    // Отображает отрезок наблюдения или запрета.
+    void drawSegment(const PlanSegment& segment, PlanObjectId id, bool forbidden,
+                     bool selected);
+
+    // Отображает дорогу и её ширину.
+    void drawRoad(const Road& road, bool selected);
+
+    // Показывает полосу дороги перед добавлением.
+    void previewRoad(const Road& road, bool allowed);
+
+    // Отображает отдельную монтажную опору.
+    void drawPole(const MountPole& pole, bool selected);
+
+    // Возвращает допуск выбора края в метрах плана.
+    double facadePickTolerance() const;
+
     // Возвращает идентификатор объекта в указанной точке.
     PlanObjectId objectAt(PlanPoint point) const;
 
@@ -91,7 +107,9 @@ private:
     QPoint panPosition_;
     bool panning_ = false;
     bool leftPressed_ = false;
+    QGraphicsPathItem* roadPreview_ = nullptr;
     QGraphicsLineItem* fencePreview_ = nullptr;
     QGraphicsRectItem* buildingPreview_ = nullptr;
     QGraphicsPathItem* cameraPreview_ = nullptr;
 };
+

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -53,6 +54,7 @@ struct Road
 {
     PlanObjectId id = 0;
     std::vector<PlanPoint> centerline;
+    double widthMeters = 4.0;
 };
 
 // Координаты и высота точечной цели.
@@ -91,9 +93,36 @@ struct MountZone
     std::optional<PlanObjectId> buildingId;
 };
 
+// Параметры монтажа камеры на отдельной опоре.
+struct MountPole
+{
+    PlanObjectId id = 0;
+    PlanPoint position;
+    double heightMeters = 3.0;
+};
+
+// Индекс ребра внешнего контура или внутреннего двора.
+struct FacadeEdge
+{
+    PlanObjectId buildingId = 0;
+    std::size_t footprint = 0;
+    std::size_t ring = 0;
+    std::size_t edge = 0;
+};
+
+// Запрещённый интервал вдоль ребра в долях его длины.
+struct FacadeBan
+{
+    PlanObjectId id = 0;
+    FacadeEdge facade;
+    double from = 0.0;
+    double to = 1.0;
+};
+
 // Географические координаты начала локальной системы плана.
 struct MapReference
 {
     double originLatitudeDegrees = 0.0;
     double originLongitudeDegrees = 0.0;
 };
+
